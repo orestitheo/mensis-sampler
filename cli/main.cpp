@@ -7,7 +7,7 @@
 
 static int usage() {
     std::cerr << "usage: mensis-cli loop <sample> --out file.wav [--bpm 120] [--bars 1] [--seconds 8]\n"
-                 "                  [--start 0] [--length 1] [--reverse 0|1] [--level -6] [--pan 0] [--rate 48000]\n";
+                 "                  [--start 0] [--length 1] [--reverse 0|1] [--level -6] [--pan 0] [--warp 1] [--rate 48000]\n";
     return 1;
 }
 
@@ -28,7 +28,7 @@ int main(int argc, char* argv[]) {
     if (argc < 3 || std::string(argv[1]) != "loop") return usage();
 
     std::map<std::string, std::string> opt{{"--bpm", "120"}, {"--bars", "1"}, {"--seconds", "8"}, {"--start", "0"},
-        {"--length", "1"}, {"--reverse", "0"}, {"--level", "-6"}, {"--pan", "0"}, {"--rate", "48000"}, {"--out", ""}};
+        {"--length", "1"}, {"--reverse", "0"}, {"--level", "-6"}, {"--pan", "0"}, {"--warp", "1"}, {"--rate", "48000"}, {"--out", ""}};
     for (int i = 3; i + 1 < argc; i += 2) {
         if (!opt.contains(argv[i])) return usage();
         opt[argv[i]] = argv[i + 1];
@@ -43,7 +43,8 @@ int main(int argc, char* argv[]) {
 
     const mensis::LoopParams params{static_cast<float>(num("--start")), static_cast<float>(num("--length")),
                                     num("--bars"), num("--reverse") != 0.0,
-                                    static_cast<float>(num("--level")), static_cast<float>(num("--pan"))};
+                                    static_cast<float>(num("--level")), static_cast<float>(num("--pan")),
+                                    num("--warp") != 0.0};
     mensis::LoopTrack track;
     track.prepare(rate);
     juce::AudioBuffer<float> out(2, static_cast<int>(seconds * rate));

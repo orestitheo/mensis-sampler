@@ -15,6 +15,9 @@ public:
     // Message thread only. guessBars: pick the bar count that fits the sample at the current tempo.
     bool loadSample(size_t track, const juce::File& file, bool guessBars);
     juce::File getSampleFile(size_t track) const; // message thread only
+    const mensis::Sample* getSample(size_t track) const { return ownedSamples[track].get(); } // message thread only
+    // 0..1 where the track is playing in its sample, -1 when stopped or empty. Any thread.
+    float getPlayPosition(size_t track) const { return playPos[track].load(std::memory_order_relaxed); }
 
     juce::AudioProcessorValueTreeState params;
 
@@ -50,6 +53,7 @@ private:
         std::atomic<float>* reverse;
         std::atomic<float>* level;
         std::atomic<float>* pan;
+        std::atomic<float>* warp;
     };
     std::array<TrackParams, kNumTracks> trackParams{};
     std::array<mensis::LoopTrack, kNumTracks> tracks;
@@ -62,6 +66,7 @@ private:
     std::vector<Retired> retired;
     std::atomic<uint64_t> blocksDone{0};
 
+    std::array<std::atomic<float>, kNumTracks> playPos{};
     std::atomic<double> lastBpm{120.0};
     double internalPpq = 0.0; // clock for Standalone, where there is no host
 };

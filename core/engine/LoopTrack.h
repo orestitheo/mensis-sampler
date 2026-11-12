@@ -10,6 +10,7 @@ struct LoopParams {
     bool reverse = false;
     float levelDb = -6.0f; // -60 = silent
     float pan = 0.0f;      // -1 left .. +1 right (balance)
+    bool warp = false;     // true: keep the original pitch, stretch time with overlapping grains
 };
 
 // One looping track. The play position comes straight from the host's beat position,
@@ -23,8 +24,12 @@ public:
     void render(const Sample& sample, const LoopParams& params, double ppq, double bpm,
                 juce::AudioBuffer<float>& out, int startSample, int numSamples);
 
+    // Where the last rendered sample was read, 0..1 of the whole sample (for the playhead in the UI).
+    float position() const { return lastPos; }
+
 private:
     double sampleRate = 48000.0;
+    float lastPos = 0.0f;
     bool primed = false; // first render jumps straight to the param values instead of gliding from 0
     juce::SmoothedValue<float> start, length, gain, pan;
 };

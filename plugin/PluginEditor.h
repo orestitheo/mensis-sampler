@@ -1,51 +1,337 @@
 #pragma once
 #include "PluginProcessor.h"
 
-// Temporary UI: a Load button + file name per track (drop files onto a row), then JUCE's generic knobs.
-class MensisEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer {
+// Black and white look: thin arc knobs (like Live's), outlined buttons that fill white when on.
+class MensisLook final : public juce::LookAndFeel_V4 {
 public:
-    explicit MensisEditor(MensisProcessor& p) : AudioProcessorEditor(p), proc(p), knobs(p) {
-        for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) {
-            rows[t].load.setButtonText("Load T" + juce::String(t + 1));
-            rows[t].load.onClick = [this, t] { chooseFile(t); };
-            addAndMakeVisible(rows[t].load);
-            addAndMakeVisible(rows[t].name);
-        }
-        addAndMakeVisible(knobs);
-        setSize(560, 720);
-        timerCallback();
-        startTimerHz(4); // picks up samples restored from a saved Live set
+    static inline const juce::Colour bg{0xff000000}, fg{0xffffffff}, dim{0xff3a3a3a}, mid{0xff8a8a8a};
+
+    MensisLook() {
+        setColour(juce::ResizableWindow::backgroundColourId, bg);
+        setColour(juce::Label::textColourId, fg);
+        setColour(juce::Slider::textBoxTextColourId, fg);
+        setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        setColour(juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
+        setColour(juce::Slider::textBoxHighlightColourId, mid);
+        setColour(juce::TextEditor::textColourId, fg);
+        setColour(juce::TextEditor::focusedOutlineColourId, fg);
+        setColour(juce::CaretComponent::caretColourId, fg);
+        setColour(juce::TextButton::textColourOffId, fg);
+        setColour(juce::TextButton::textColourOnId, bg);
+        setColour(juce::AlertWindow::backgroundColourId, bg);
+        setColour(juce::AlertWindow::textColourId, fg);
+        setColour(juce::AlertWindow::outlineColourId, fg);
     }
 
+    static juce::Font font(float size, bool bold = false) {
+        return juce::Font(juce::FontOptions(size, bold ? juce::Font::bold : juce::Font::plain));
+    }
+
+    void drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h, float pos, float startAngle,
+                          float endAngle, juce::Slider& s) override {
+        const auto box = juce::Rectangle<int>(x, y, w, h).toFloat();
+        const float r = std::min(box.getWidth(), box.getHeight()) * 0.5f - 3.0f;
+        const auto c = box.getCentre();
+        const float angle = startAngle + pos * (endAngle - startAngle);
+        // Bipolar params (Pan) draw their arc from the middle, like Live does.
+        const float from = s.getMinimum() < 0.0 && s.getMaximum() > 0.0
+            ? startAngle + static_cast<float>(s.valueToProportionOfLength(0.0)) * (endAngle - startAngle) : startAngle;
+        const juce::PathStrokeType stroke(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::butt);
+
+        juce::Path track, value;
+        track.addCentredArc(c.x, c.y, r, r, 0.0f, startAngle, endAngle, true);
+        g.setColour(dim);
+        g.strokePath(track, stroke);
+        value.addCentredArc(c.x, c.y, r, r, 0.0f, std::min(from, angle), std::max(from, angle), true);
+        g.setColour(s.isEnabled() ? fg : mid);
+        g.strokePath(value, stroke);
+
+        const auto tip = c.getPointOnCircumference(r, angle), inner = c.getPointOnCircumference(r * 0.3f, angle);
+        g.drawLine({inner, tip}, 2.0f);
+    }
+
+    void drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down) override {
+        const auto box = b.getLocalBounds().toFloat().reduced(0.5f);
+        if (b.getToggleState() || down) {
+            g.setColour(fg);
+            g.fillRect(box);
+        } else {
+            g.setColour(over ? fg.withAlpha(0.12f) : bg);
+            g.fillRect(box);
+        }
+        g.setColour(b.getToggleState() ? fg : mid);
+        g.drawRect(box, 1.0f);
+    }
+
+    juce::Font getTextButtonFont(juce::TextButton&, int) override { return font(11.0f, true); }
+    juce::Font getLabelFont(juce::Label& l) override { return l.getFont(); }
+    juce::Label* createSliderTextBox(juce::Slider& s) override {
+        auto* l = LookAndFeel_V4::createSliderTextBox(s);
+        l->setFont(font(11.0f));
+        l->setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
+        l->setColour(juce::Label::outlineWhenEditingColourId, fg);
+        return l;
+    }
+};
+
+// One track's sample: loop region lit, playhead line, drag near an edge to move Start or End.
+class WaveformView final : public juce::Component {
+public:
+    WaveformView(MensisProcessor& p, size_t t) : proc(p), track(t) {}
+
     void paint(juce::Graphics& g) override {
-        g.fillAll(getLookAndFeel().findColour(juce::ResizableWindow::backgroundColourId));
+        const auto b = getLocalBounds().toFloat();
+        g.setColour(MensisLook::dim);
+        g.drawRect(b, 1.0f);
+        const auto* sample = proc.getSample(track);
+        if (sample == nullptr) {
+            g.setColour(MensisLook::mid);
+            g.setFont(MensisLook::font(11.0f));
+            g.drawText("DROP A SAMPLE", b, juce::Justification::centred);
+            return;
+        }
+        if (sample != peaksFor || static_cast<int>(peaks.size()) != getWidth()) buildPeaks(*sample);
+
+        const auto [st, en] = region();
+        const float w = b.getWidth(), mid = b.getCentreY(), half = b.getHeight() * 0.5f - 2.0f;
+        g.setColour(MensisLook::fg.withAlpha(0.08f));
+        g.fillRect(b.withX(st * w).withRight(en * w));
+        for (size_t x = 0; x < peaks.size(); ++x) {
+            const float fx = static_cast<float>(x) / w;
+            g.setColour(fx >= st && fx <= en ? MensisLook::fg : MensisLook::dim); // only the loop region is lit
+            g.drawVerticalLine(static_cast<int>(x), mid - peaks[x] * half, mid + peaks[x] * half);
+        }
+        g.setColour(MensisLook::fg);
+        g.fillRect(st * w, 0.0f, 2.0f, b.getHeight());
+        g.fillRect(en * w - 2.0f, 0.0f, 2.0f, b.getHeight());
+        if (const float pos = proc.getPlayPosition(track); pos >= 0.0f) {
+            g.setColour(MensisLook::fg);
+            g.fillRect(pos * w - 0.5f, 0.0f, 1.0f, b.getHeight());
+            g.fillEllipse(pos * w - 3.0f, -3.0f, 6.0f, 6.0f);
+        }
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override {
+        if (proc.getSample(track) == nullptr) return;
+        const auto [st, en] = region();
+        const float x = xNorm(e);
+        draggingStart = std::abs(x - st) < std::abs(x - en);
+        param("start")->beginChangeGesture();
+        param("length")->beginChangeGesture();
+        dragging = true;
+        mouseDrag(e);
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override {
+        if (!dragging) return;
+        auto [st, en] = region();
+        const float x = xNorm(e);
+        if (draggingStart) st = std::min(x, en - 0.01f * (1.0f - x)); // keep End where it is
+        else en = std::max(x, st + 0.01f * (1.0f - st));
+        st = std::clamp(st, 0.0f, 0.99f);
+        set("start", st);
+        set("length", std::clamp((en - st) / (1.0f - st), 0.01f, 1.0f)); // Length = share of what's after Start
+    }
+
+    void mouseUp(const juce::MouseEvent&) override {
+        if (!dragging) return;
+        param("start")->endChangeGesture();
+        param("length")->endChangeGesture();
+        dragging = false;
+    }
+
+private:
+    juce::RangedAudioParameter* param(const char* name) const {
+        return proc.params.getParameter("t" + juce::String(track + 1) + "." + name);
+    }
+    float value(const char* name) const { return param(name)->convertFrom0to1(param(name)->getValue()); }
+    void set(const char* name, float v) { param(name)->setValueNotifyingHost(param(name)->convertTo0to1(v)); }
+    std::pair<float, float> region() const {
+        const float st = value("start");
+        return {st, st + value("length") * (1.0f - st)};
+    }
+    float xNorm(const juce::MouseEvent& e) const {
+        return std::clamp(e.position.x / static_cast<float>(std::max(1, getWidth())), 0.0f, 1.0f);
+    }
+
+    void buildPeaks(const mensis::Sample& sample) { // biggest |level| per pixel column, rebuilt on load/resize
+        peaksFor = &sample;
+        peaks.assign(static_cast<size_t>(std::max(0, getWidth())), 0.0f);
+        const int n = sample.audio.getNumSamples();
+        for (size_t x = 0; x < peaks.size(); ++x) {
+            const int a = static_cast<int>(x * n / peaks.size()), z = static_cast<int>((x + 1) * n / peaks.size());
+            for (int ch = 0; ch < sample.audio.getNumChannels(); ++ch)
+                peaks[x] = std::max(peaks[x], sample.audio.getMagnitude(ch, a, std::max(1, z - a)));
+        }
+    }
+
+    MensisProcessor& proc;
+    size_t track;
+    const mensis::Sample* peaksFor = nullptr;
+    std::vector<float> peaks;
+    bool dragging = false, draggingStart = true;
+};
+
+// A Live-style knob: name above, value below. Drag up/down, double-click resets.
+class Knob final : public juce::Component {
+public:
+    void attach(juce::RangedAudioParameter& param, const juce::String& name) {
+        slider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
+        slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 64, 14);
+        label.setText(name, juce::dontSendNotification);
+        label.setFont(MensisLook::font(10.0f, true));
+        label.setJustificationType(juce::Justification::centred);
+        attachment = std::make_unique<juce::SliderParameterAttachment>(param, slider);
+        slider.setDoubleClickReturnValue(true, param.convertFrom0to1(param.getDefaultValue()));
+        addAndMakeVisible(slider);
+        addAndMakeVisible(label);
     }
 
     void resized() override {
-        auto area = getLocalBounds().reduced(8);
-        for (auto& row : rows) {
-            auto line = area.removeFromTop(28);
-            row.load.setBounds(line.removeFromLeft(90));
-            row.name.setBounds(line.withTrimmedLeft(8));
-            area.removeFromTop(4);
+        auto area = getLocalBounds();
+        label.setBounds(area.removeFromTop(14));
+        slider.setBounds(area);
+    }
+
+private:
+    juce::Slider slider;
+    juce::Label label;
+    std::unique_ptr<juce::SliderParameterAttachment> attachment;
+};
+
+// One track: number, Load button, file name; waveform on the left, knobs and switches on the right.
+class TrackStrip final : public juce::Component {
+public:
+    std::function<void()> onLoad;
+
+    TrackStrip(MensisProcessor& p, size_t t) : proc(p), track(t), wave(p, t) {
+        number.setText(juce::String(t + 1), juce::dontSendNotification);
+        number.setFont(MensisLook::font(22.0f, true));
+        name.setFont(MensisLook::font(12.0f));
+        name.setColour(juce::Label::textColourId, MensisLook::mid);
+        load.setButtonText("LOAD");
+        load.onClick = [this] { if (onLoad) onLoad(); };
+        for (auto* c : std::initializer_list<juce::Component*>{&number, &name, &load, &wave}) addAndMakeVisible(c);
+
+        const std::array<std::pair<const char*, const char*>, 5> knobIds{
+            {{"start", "START"}, {"length", "LENGTH"}, {"bars", "BARS"}, {"level", "LEVEL"}, {"pan", "PAN"}}};
+        for (size_t i = 0; i < knobs.size(); ++i) {
+            knobs[i].attach(*p.params.getParameter(id(knobIds[i].first)), knobIds[i].second);
+            addAndMakeVisible(knobs[i]);
         }
-        knobs.setBounds(area.withTrimmedTop(8));
+        const std::array<std::pair<const char*, const char*>, 2> toggleIds{{{"reverse", "REV"}, {"warp", "WARP"}}};
+        for (size_t i = 0; i < toggles.size(); ++i) {
+            toggles[i].button.setButtonText(toggleIds[i].second);
+            toggles[i].button.setClickingTogglesState(true);
+            toggles[i].attachment = std::make_unique<juce::ButtonParameterAttachment>(
+                *p.params.getParameter(id(toggleIds[i].first)), toggles[i].button);
+            addAndMakeVisible(toggles[i].button);
+        }
+    }
+
+    void refresh() {
+        const auto file = proc.getSampleFile(track);
+        name.setText(file == juce::File{} ? "empty" : file.getFileNameWithoutExtension(), juce::dontSendNotification);
+        wave.repaint();
+    }
+
+    void paint(juce::Graphics& g) override {
+        g.setColour(MensisLook::dim);
+        g.drawHorizontalLine(0, 0.0f, static_cast<float>(getWidth()));
+    }
+
+    void resized() override {
+        auto area = getLocalBounds().reduced(0, 10);
+        auto head = area.removeFromTop(24);
+        number.setBounds(head.removeFromLeft(28));
+        load.setBounds(head.removeFromLeft(56).reduced(0, 2));
+        name.setBounds(head.withTrimmedLeft(8));
+        area.removeFromTop(6);
+
+        auto right = area.removeFromRight(7 * 60);
+        wave.setBounds(area.withTrimmedRight(16));
+        for (auto& k : knobs) k.setBounds(right.removeFromLeft(60));
+        right = right.withSizeKeepingCentre(right.getWidth() - 8, 48);
+        for (auto& t : toggles) {
+            t.button.setBounds(right.removeFromTop(22).reduced(4, 0));
+            right.removeFromTop(4);
+        }
+    }
+
+private:
+    juce::String id(const char* name) const { return "t" + juce::String(track + 1) + "." + name; }
+
+    struct Toggle { juce::TextButton button; std::unique_ptr<juce::ButtonParameterAttachment> attachment; };
+    MensisProcessor& proc;
+    size_t track;
+    juce::Label number, name;
+    juce::TextButton load;
+    WaveformView wave;
+    std::array<Knob, 5> knobs;
+    std::array<Toggle, 2> toggles;
+};
+
+class MensisEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget,
+                           public juce::TextDragAndDropTarget, private juce::Timer {
+public:
+    explicit MensisEditor(MensisProcessor& p) : AudioProcessorEditor(p), proc(p) {
+        setLookAndFeel(&look);
+        for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) {
+            strips[t] = std::make_unique<TrackStrip>(p, t);
+            strips[t]->onLoad = [this, t] { chooseFile(t); };
+            addAndMakeVisible(*strips[t]);
+        }
+        sendLookAndFeelChange(); // the strips were built before they had a parent; restyle their knob value boxes
+        setSize(900, 600);
+        timerCallback();
+        startTimerHz(30); // moves the playheads; also picks up samples restored from a saved Live set
+    }
+
+    ~MensisEditor() override { setLookAndFeel(nullptr); }
+
+    void paint(juce::Graphics& g) override {
+        g.fillAll(MensisLook::bg);
+        auto head = getLocalBounds().reduced(20, 0).removeFromTop(kHeader);
+        g.setColour(MensisLook::fg);
+        g.setFont(MensisLook::font(16.0f, true));
+        g.drawText("M E N S I S", head.removeFromTop(kHeader / 2 + 8), juce::Justification::bottomLeft);
+        g.setColour(MensisLook::mid);
+        g.setFont(MensisLook::font(11.0f));
+        g.drawText("SAMPLER", head, juce::Justification::topLeft);
+    }
+
+    void resized() override {
+        auto area = getLocalBounds().reduced(20, 0).withTrimmedTop(kHeader).withTrimmedBottom(12);
+        const int h = area.getHeight() / static_cast<int>(MensisProcessor::kNumTracks);
+        for (auto& s : strips) s->setBounds(area.removeFromTop(h));
     }
 
     bool isInterestedInFileDrag(const juce::StringArray&) override { return true; }
 
     void filesDropped(const juce::StringArray& files, int, int y) override {
-        size_t track = 0; // dropped below the rows: first empty track, else track 1
+        size_t track = 0; // dropped outside the tracks: first empty track, else track 1
         for (size_t t = MensisProcessor::kNumTracks; t-- > 0;)
             if (proc.getSampleFile(t) == juce::File{}) track = t;
         for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t)
-            if (y >= rows[t].load.getY() && y < rows[t].load.getBottom()) track = t;
+            if (y >= strips[t]->getY() && y < strips[t]->getBottom()) track = t;
         load(track, juce::File(files[0]));
     }
 
+    // Some apps drag a file as text (a path or a file:// URL) instead of as a file.
+    bool isInterestedInTextDrag(const juce::String& text) override { return toFile(text) != juce::File{}; }
+    void textDropped(const juce::String& text, int x, int y) override {
+        filesDropped(juce::StringArray(toFile(text).getFullPathName()), x, y);
+    }
+
 private:
+    static juce::File toFile(const juce::String& text) {
+        const auto line = text.upToFirstOccurrenceOf("\n", false, false).trim();
+        const auto path = line.startsWith("file://") ? juce::URL(line).getLocalFile().getFullPathName() : line;
+        return juce::File::isAbsolutePath(path) && juce::File(path).existsAsFile() ? juce::File(path) : juce::File{};
+    }
+
     void chooseFile(size_t track) {
-        chooser = std::make_unique<juce::FileChooser>("Load sample for T" + juce::String(track + 1), juce::File{},
+        chooser = std::make_unique<juce::FileChooser>("Load sample for track " + juce::String(track + 1), juce::File{},
                                                       "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
         chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                              [this, track](const juce::FileChooser& fc) {
@@ -61,16 +347,12 @@ private:
     }
 
     void timerCallback() override {
-        for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) {
-            const auto file = proc.getSampleFile(t);
-            rows[t].name.setText(file == juce::File{} ? "(empty: drop a file here)" : file.getFileName(),
-                                 juce::dontSendNotification);
-        }
+        for (auto& s : strips) s->refresh();
     }
 
-    struct Row { juce::TextButton load; juce::Label name; };
+    static constexpr int kHeader = 96;
+    MensisLook look; // declared first so it outlives every child that uses it
     MensisProcessor& proc;
-    std::array<Row, MensisProcessor::kNumTracks> rows;
-    juce::GenericAudioProcessorEditor knobs;
+    std::array<std::unique_ptr<TrackStrip>, MensisProcessor::kNumTracks> strips;
     std::unique_ptr<juce::FileChooser> chooser;
 };

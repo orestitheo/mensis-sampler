@@ -83,3 +83,35 @@ TEST_CASE("pan is a balance: centre keeps both sides at full level") {
     CHECK_THAT(out.getSample(0, 0), WithinAbs(0.4995, 1e-3));
     CHECK(out.getSample(1, 0) == 0.0f);
 }
+
+TEST_CASE("warp keeps the pitch when the loop is stretched") {
+    // 1 s of 440 Hz, looped over 1 bar at 120 BPM = 2 s: tape mode would play it at 220 Hz.
+    mensis::Sample s;
+    s.sampleRate = kRate;
+    s.audio.setSize(1, static_cast<int>(kRate));
+    for (int i = 0; i < s.audio.getNumSamples(); ++i)
+        s.audio.setSample(0, i, std::sin(2.0f * juce::MathConstants<float>::pi * 440.0f * i / static_cast<float>(kRate)));
+
+    auto crossingsPerSecond = [&](bool warp) {
+        mensis::LoopParams p;
+        p.levelDb = 0.0f;
+        p.warp = warp;
+        mensis::LoopTrack track;
+        track.prepare(kRate);
+        const int len = static_cast<int>(kRate); // render 1 s from beat 0.5, away from the seam
+        juce::AudioBuffer<float> out(2, len);
+        out.clear();
+        for (int pos = 0; pos < len; pos += 512)
+            track.render(s, p, 0.5 + pos * kBpm / (60.0 * kRate), kBpm, out, pos, std::min(512, len - pos));
+        const auto stats = mensis::measure({out.getReadPointer(0), static_cast<size_t>(len)});
+        CHECK(stats.finite);
+        CHECK(stats.peak <= 1.0f);
+        CHECK(stats.maxStep < 0.1f); // a 440 Hz sine steps at most ~0.058 per sample: no clicks between grains
+        int crossings = 0;
+        for (int i = 1; i < len; ++i) crossings += (out.getSample(0, i - 1) < 0.0f) != (out.getSample(0, i) < 0.0f);
+        return crossings / 2.0;
+    };
+    CHECK_THAT(crossingsPerSecond(false), WithinAbs(220.0, 3.0));
+    // Overlapping grains of a pure sine partly cancel now and then, which adds a few extra crossings.
+    CHECK_THAT(crossingsPerSecond(true), WithinAbs(440.0, 25.0));
+}

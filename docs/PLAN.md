@@ -26,4 +26,7 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
 - Samples load on the message thread and are swapped in via an atomic pointer; old ones are freed only
   after the audio thread has finished a later block.
 - Saved with the Live set: params + sample file paths (not the audio itself).
-- Param IDs: `t1.start`, `t1.length`, `t1.bars`, `t1.reverse`, `t1.level`, `t1.pan` (…t4). 24 params, 6 per track.
+- Warp (default on): keeps the original pitch. Two overlapping 60 ms grains read at normal speed; each new
+  grain starts where the tape-style position is, so timing is still locked to Live. Warp off = tape mode.
+- Waveform per track: loop region shaded, white playhead, drag near an edge to move Start or End.
+- Param IDs: `t1.start`, `t1.length`, `t1.bars`, `t1.reverse`, `t1.warp`, `t1.level`, `t1.pan` (…t4). 28 params, 7 per track.

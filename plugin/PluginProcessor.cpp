@@ -19,6 +19,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                    std::make_unique<juce::AudioParameterFloat>(id("length"), label("Length"), 0.01f, 1.0f, 1.0f),
                    std::make_unique<juce::AudioParameterChoice>(id("bars"), label("Bars"), kBarNames, 2),
                    std::make_unique<juce::AudioParameterBool>(id("reverse"), label("Reverse"), false),
+                   std::make_unique<juce::AudioParameterBool>(id("warp"), label("Warp"), true),
                    std::make_unique<juce::AudioParameterFloat>(id("level"), label("Level"),
                        juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f), -6.0f),
                    std::make_unique<juce::AudioParameterFloat>(id("pan"), label("Pan"), -1.0f, 1.0f, 0.0f));
@@ -33,7 +34,8 @@ MensisProcessor::MensisProcessor()
       params(*this, nullptr, "MensisSampler", makeLayout()) {
     for (size_t t = 0; t < kNumTracks; ++t) {
         auto raw = [&](const char* name) { return params.getRawParameterValue(paramId(t, name)); };
-        trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan")};
+        trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan"), raw("warp")};
+        playPos[t].store(-1.0f);
     }
 }
 
@@ -56,15 +58,19 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     lastBpm.store(bpm);
 
+    if (!playing)
+        for (auto& p : playPos) p.store(-1.0f, std::memory_order_relaxed);
     if (playing && buffer.getNumChannels() >= 2) {
         for (size_t t = 0; t < kNumTracks; ++t) {
             const auto* sample = liveSamples[t].load(std::memory_order_acquire);
+            playPos[t].store(-1.0f, std::memory_order_relaxed);
             if (sample == nullptr) continue;
             const auto& tp = trackParams[t];
             const mensis::LoopParams lp{tp.start->load(), tp.length->load(),
-                                        kBarValues[static_cast<size_t>(tp.bars->load())], tp.reverse->load() > 0.5f,
-                                        tp.level->load(), tp.pan->load()};
+                                  kBarValues[static_cast<size_t>(tp.bars->load())], tp.reverse->load() > 0.5f,
+                                  tp.level->load(), tp.pan->load(), tp.warp->load() > 0.5f};
             tracks[t].render(*sample, lp, ppq, bpm, buffer, 0, numSamples);
+            playPos[t].store(tracks[t].position(), std::memory_order_relaxed);
         }
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch) // safety net: never send more than 0 dBFS to Live
             juce::FloatVectorOperations::clip(buffer.getWritePointer(ch), buffer.getReadPointer(ch), -1.0f, 1.0f, numSamples);
