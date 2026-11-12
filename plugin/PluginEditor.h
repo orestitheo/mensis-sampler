@@ -451,18 +451,31 @@ public:
 };
 
 // A Live-style knob: name above, value below. Drag up/down, double-click resets.
-class Knob final : public juce::Component {
+// What a knob needs from the editor it sits in (found by walking up its parents, so each plugin
+// instance's knobs talk to their own editor).
+struct KnobHost {
+    virtual ~KnobHost() = default;
+    virtual std::optional<float> modulatedValue(const juce::RangedAudioParameter&) = 0; // 0..1 if modulated
+    virtual void knobTouched(juce::RangedAudioParameter&) = 0;                          // MAP picks targets here
+};
+
+class Knob final : public juce::Component, private juce::Timer {
 public:
-    void attach(juce::RangedAudioParameter& param, const juce::String& name) {
+    void attach(juce::RangedAudioParameter& p, const juce::String& name) {
+        param = &p;
         slider.setSliderStyle(juce::Slider::RotaryVerticalDrag);
         slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 64, 14);
         label.setText(name, juce::dontSendNotification);
         label.setFont(MensisLook::font(10.0f, true));
         label.setJustificationType(juce::Justification::centred);
-        attachment = std::make_unique<juce::SliderParameterAttachment>(param, slider);
-        slider.setDoubleClickReturnValue(true, param.convertFrom0to1(param.getDefaultValue()));
+        attachment = std::make_unique<juce::SliderParameterAttachment>(p, slider);
+        slider.setDoubleClickReturnValue(true, p.convertFrom0to1(p.getDefaultValue()));
+        slider.onDragStart = [this] {
+            if (auto* host = findParentComponentOfClass<KnobHost>()) host->knobTouched(*param);
+        };
         addAndMakeVisible(slider);
         addAndMakeVisible(label);
+        startTimerHz(30);
     }
 
     void resized() override {
@@ -471,10 +484,41 @@ public:
         slider.setBounds(area);
     }
 
+    // Modulation: a faint arc from the knob's setting to where it is now, and a dot at the moving value.
+    void paintOverChildren(juce::Graphics& g) override {
+        if (!modded) return;
+        const auto box = slider.getLookAndFeel().getSliderLayout(slider).sliderBounds.toFloat() + slider.getPosition().toFloat();
+        const float r = std::min(box.getWidth(), box.getHeight()) * 0.5f - 3.0f;
+        const auto c = box.getCentre();
+        const auto rp = slider.getRotaryParameters();
+        auto angleOf = [&](float norm) { return rp.startAngleRadians + norm * (rp.endAngleRadians - rp.startAngleRadians); };
+        const float from = angleOf(param->getValue()), to = angleOf(modValue);
+        juce::Path arc;
+        arc.addCentredArc(c.x, c.y, r + 5.0f, r + 5.0f, 0.0f, std::min(from, to), std::max(from, to), true);
+        g.setColour(MensisLook::fg.withAlpha(0.45f));
+        g.strokePath(arc, juce::PathStrokeType(1.5f));
+        const auto dot = c.getPointOnCircumference(r + 5.0f, to);
+        g.setColour(MensisLook::fg);
+        g.fillEllipse(dot.x - 3.0f, dot.y - 3.0f, 6.0f, 6.0f);
+    }
+
 private:
+    void timerCallback() override {
+        auto* host = isShowing() ? findParentComponentOfClass<KnobHost>() : nullptr;
+        const auto v = host != nullptr && param != nullptr ? host->modulatedValue(*param) : std::nullopt;
+        if (v.has_value() != modded || (v && std::abs(*v - modValue) > 0.002f)) {
+            modded = v.has_value();
+            modValue = v.value_or(0.0f);
+            repaint();
+        }
+    }
+
+    juce::RangedAudioParameter* param = nullptr;
     juce::Slider slider;
     juce::Label label;
     std::unique_ptr<juce::SliderParameterAttachment> attachment;
+    bool modded = false;
+    float modValue = 0.0f;
 };
 
 // One track: number, Load button, file name; waveform on the left, knobs and switches on the right.
@@ -644,6 +688,7 @@ public:
     void setRows(const std::array<juce::Rectangle<int>, MensisProcessor::kNumTracks>& r) { rows = r; resized(); }
 
     void paint(juce::Graphics& g) override {
+        g.fillAll(MensisLook::bg); // covers the track strips' divider lines underneath
         g.setColour(MensisLook::dim);
         g.fillRect(static_cast<float>(kSendWidth) + 10.0f, 16.0f, 1.0f, static_cast<float>(getHeight()) - 32.0f);
         auto title = controlsArea().translated(0, -44).withHeight(36);
@@ -679,8 +724,136 @@ private:
     std::array<juce::Rectangle<int>, MensisProcessor::kNumTracks> rows{};
 };
 
+// MOD page: the 4 fixed macros on top, then the 4 mod slots, each with a live scope of its signal.
+class ModPanel final : public juce::Component, private juce::Timer {
+public:
+    std::function<void(int)> onMap; // MAP pressed on a slot
+
+    explicit ModPanel(MensisProcessor& p) : proc(p) {
+        const std::array<std::pair<const char*, const char*>, 4> macroIds{
+            {{"macro.destroy", "DESTROY"}, {"macro.drift", "DRIFT"}, {"macro.ring", "RING"}, {"macro.space", "SPACE"}}};
+        for (size_t i = 0; i < macros.size(); ++i) {
+            macros[i].attach(*p.params.getParameter(macroIds[i].first), macroIds[i].second);
+            addAndMakeVisible(macros[i]);
+        }
+        for (size_t m = 0; m < rows.size(); ++m) {
+            auto& row = rows[m];
+            const auto prefix = "mod" + juce::String(m + 1) + ".";
+            const std::array<std::pair<const char*, const char*>, 4> ids{{{"type", "TYPE"}, {"rate", "RATE"}, {"shape", "SHAPE"}, {"depth", "DEPTH"}}};
+            for (size_t k = 0; k < row.knobs.size(); ++k) {
+                row.knobs[k].attach(*p.params.getParameter(prefix + ids[k].first), ids[k].second);
+                addAndMakeVisible(row.knobs[k]);
+            }
+            row.map.setButtonText("MAP");
+            row.map.setTooltip("Press, then touch any knob: it becomes this modulator's target");
+            row.map.onClick = [this, m] { if (onMap) onMap(static_cast<int>(m)); };
+            row.clear.setButtonText(juce::CharPointer_UTF8("\xe2\x9c\x95")); // ✕
+            row.clear.setTooltip("Remove the target");
+            row.clear.onClick = [this, m] { proc.setModTarget(m, {}); };
+            row.target.setFont(MensisLook::font(11.0f, true));
+            row.target.setJustificationType(juce::Justification::centredLeft);
+            for (auto* c : std::initializer_list<juce::Component*>{&row.map, &row.clear, &row.target}) addAndMakeVisible(c);
+        }
+        startTimerHz(30);
+    }
+
+    void setArmed(int slot) {
+        armed = slot;
+        for (size_t m = 0; m < rows.size(); ++m) rows[m].map.setToggleState(static_cast<int>(m) == armed, juce::dontSendNotification);
+    }
+
+    void paint(juce::Graphics& g) override {
+        g.fillAll(MensisLook::bg); // covers the track strips' divider lines underneath
+        auto heading = [&](const char* text, juce::Rectangle<int> r) {
+            g.setColour(MensisLook::fg);
+            g.setFont(MensisLook::font(13.0f, true));
+            g.drawText(text, r, juce::Justification::bottomLeft);
+        };
+        heading("M A C R O S", {kLeft, 0, getWidth() - kLeft, 28});
+        heading("M O D U L A T I O N", {kLeft, kMacroH + 6, getWidth() - kLeft, 28});
+        g.setColour(MensisLook::dim);
+        g.fillRect(static_cast<float>(kLeft), static_cast<float>(kMacroH), static_cast<float>(getWidth() - kLeft), 1.0f);
+
+        for (size_t m = 0; m < rows.size(); ++m) {
+            const auto row = rowArea(m);
+            g.setColour(MensisLook::fg);
+            g.setFont(MensisLook::font(20.0f, true));
+            g.drawText(juce::String(m + 1), row.withWidth(24).toFloat(), juce::Justification::centred);
+            drawScope(g, m, scopeArea(m).toFloat());
+        }
+    }
+
+    void resized() override {
+        auto top = juce::Rectangle<int>(kLeft, 30, getWidth() - kLeft, kMacroH - 34);
+        const int w = top.getWidth() / static_cast<int>(macros.size());
+        for (auto& k : macros) k.setBounds(top.removeFromLeft(w).withSizeKeepingCentre(72, 96));
+        for (size_t m = 0; m < rows.size(); ++m) {
+            auto row = rowArea(m).withTrimmedLeft(28);
+            for (auto& k : rows[m].knobs) k.setBounds(row.removeFromLeft(58).withSizeKeepingCentre(58, std::min(row.getHeight(), 92)));
+            auto buttons = row.removeFromLeft(56).withSizeKeepingCentre(48, 50);
+            rows[m].map.setBounds(buttons.removeFromTop(22));
+            buttons.removeFromTop(6);
+            rows[m].clear.setBounds(buttons.removeFromTop(22));
+            rows[m].target.setBounds(scopeArea(m).translated(0, scopeArea(m).getHeight() + 2).withHeight(18));
+        }
+    }
+
+private:
+    static constexpr int kLeft = 8, kMacroH = 140;
+    juce::Rectangle<int> rowArea(size_t m) const {
+        const int h = (getHeight() - kMacroH - 40) / static_cast<int>(rows.size());
+        return {kLeft, kMacroH + 40 + static_cast<int>(m) * h, getWidth() - kLeft, h};
+    }
+    juce::Rectangle<int> scopeArea(size_t m) const {
+        auto r = rowArea(m).withTrimmedLeft(28 + 4 * 58 + 56 + 8);
+        return r.withSizeKeepingCentre(r.getWidth(), 44).translated(0, -10);
+    }
+
+    // The last ~3 s of the modulator's signal as a thin line; bipolar around the middle, Env from the bottom.
+    void drawScope(juce::Graphics& g, size_t m, juce::Rectangle<float> r) const {
+        const bool env = proc.params.getRawParameterValue("mod" + juce::String(m + 1) + ".type")->load() > 1.5f;
+        g.setColour(MensisLook::dim);
+        g.drawRect(r, 1.0f);
+        if (!env) g.drawHorizontalLine(static_cast<int>(r.getCentreY()), r.getX(), r.getRight());
+        juce::Path line;
+        const auto& hist = history[m];
+        for (size_t i = 0; i < hist.size(); ++i) {
+            const float v = hist[(histPos + i) % hist.size()];
+            const float y = env ? r.getBottom() - 2.0f - v * (r.getHeight() - 4.0f) : r.getCentreY() - v * (r.getHeight() * 0.5f - 2.0f);
+            const float x = r.getX() + r.getWidth() * static_cast<float>(i) / static_cast<float>(hist.size() - 1);
+            if (i == 0) line.startNewSubPath(x, y);
+            else line.lineTo(x, y);
+        }
+        const bool active = proc.getModTarget(m).isNotEmpty();
+        g.setColour(active ? MensisLook::fg : MensisLook::mid);
+        g.strokePath(line, juce::PathStrokeType(1.5f));
+    }
+
+    void timerCallback() override {
+        histPos = (histPos + 1) % history[0].size();
+        for (size_t m = 0; m < rows.size(); ++m) {
+            history[m][(histPos + history[m].size() - 1) % history[m].size()] = proc.getModSignal(m);
+            const auto id = proc.getModTarget(m);
+            juce::String text = static_cast<int>(m) == armed ? "TOUCH A KNOB..."
+                                : id.isEmpty() ? "NO TARGET" : proc.params.getParameter(id)->getName(40).toUpperCase();
+            rows[m].target.setText(text, juce::dontSendNotification);
+            rows[m].target.setColour(juce::Label::textColourId, id.isEmpty() && static_cast<int>(m) != armed ? MensisLook::mid : MensisLook::fg);
+            rows[m].clear.setEnabled(id.isNotEmpty());
+        }
+        if (isShowing()) repaint();
+    }
+
+    struct Row { std::array<Knob, 4> knobs; juce::TextButton map, clear; juce::Label target; };
+    MensisProcessor& proc;
+    std::array<Knob, 4> macros;
+    std::array<Row, MensisProcessor::kModSlots> rows;
+    std::array<std::array<float, 90>, MensisProcessor::kModSlots> history{};
+    size_t histPos = 0;
+    int armed = -1;
+};
+
 class MensisEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget,
-                           public juce::TextDragAndDropTarget, private juce::Timer {
+                           public juce::TextDragAndDropTarget, public KnobHost, private juce::Timer {
 public:
     explicit MensisEditor(MensisProcessor& p) : AudioProcessorEditor(p), proc(p) {
         setLookAndFeel(&look);
@@ -708,8 +881,8 @@ public:
         };
         addAndMakeVisible(reroll);
 
-        const std::array<const char*, 5> pageNames{"LOOP", "GRAINS", "RESONATOR", "COLOR", "SPACE"};
-        for (int i = 0; i < 5; ++i) {
+        const std::array<const char*, 6> pageNames{"LOOP", "GRAINS", "RESO", "COLOR", "SPACE", "MOD"};
+        for (int i = 0; i < 6; ++i) {
             auto& b = pages[static_cast<size_t>(i)];
             b.setButtonText(pageNames[static_cast<size_t>(i)]);
             b.setRadioGroupId(1);
@@ -717,11 +890,15 @@ public:
             b.onClick = [this, i] {
                 for (auto& s : strips) s->setPage(i);
                 spacePanel.setVisible(i == 4);
+                modPanel.setVisible(i == 5);
             };
             addAndMakeVisible(b);
         }
         pages[0].setToggleState(true, juce::dontSendNotification);
         addChildComponent(spacePanel); // shown on the SPACE page
+        addChildComponent(modPanel);   // shown on the MOD page
+        modPanel.onMap = [this](int slot) { arm(mapArmed == slot ? -1 : slot); };
+
         sendLookAndFeelChange(); // the strips were built before they had a parent; restyle their knob value boxes
         setSize(1040, 840); // tall strips: room for a big waveform
         timerCallback();
@@ -730,15 +907,32 @@ public:
 
     ~MensisEditor() override { setLookAndFeel(nullptr); }
 
+    std::optional<float> modulatedValue(const juce::RangedAudioParameter& param) override {
+        return proc.getModulatedValue(param);
+    }
+    void knobTouched(juce::RangedAudioParameter& param) override { // MAP: the next knob you touch
+        if (mapArmed < 0 || param.getParameterID().startsWith("mod")) return;
+        proc.setModTarget(static_cast<size_t>(mapArmed), param.getParameterID());
+        // A fresh mapping should do something right away: DEPTH 0 -> +50%.
+        auto* depth = proc.params.getParameter("mod" + juce::String(mapArmed + 1) + ".depth");
+        if (depth->convertFrom0to1(depth->getValue()) == 0.0f) {
+            depth->beginChangeGesture();
+            depth->setValueNotifyingHost(depth->convertTo0to1(0.5f));
+            depth->endChangeGesture();
+        }
+        arm(-1);
+    }
+
     void paint(juce::Graphics& g) override {
         g.fillAll(MensisLook::bg);
         auto head = getLocalBounds().reduced(20, 0).removeFromTop(kHeader);
         g.setColour(MensisLook::fg);
         g.setFont(MensisLook::font(16.0f, true));
         g.drawText("M E N S I S", head.removeFromTop(kHeader / 2 + 8), juce::Justification::bottomLeft);
-        g.setColour(MensisLook::mid);
-        g.setFont(MensisLook::font(11.0f));
-        g.drawText("SAMPLER", head, juce::Justification::topLeft);
+        g.setColour(mapArmed >= 0 ? MensisLook::fg : MensisLook::mid);
+        g.setFont(MensisLook::font(11.0f, mapArmed >= 0));
+        g.drawText(mapArmed >= 0 ? "MOD " + juce::String(mapArmed + 1) + ": TOUCH A KNOB" : juce::String("SAMPLER"),
+                   head, juce::Justification::topLeft);
     }
 
     void resized() override {
@@ -748,8 +942,8 @@ public:
         reroll.setBounds(head.removeFromRight(72).withSizeKeepingCentre(72, 24));
         head.removeFromRight(8);
         for (size_t i = globalKnobs.size(); i-- > 0;) globalKnobs[i].setBounds(head.removeFromRight(i == 0 ? 76 : 60));
-        auto tabs = head.withTrimmedLeft(140).removeFromLeft(5 * 74).withSizeKeepingCentre(5 * 74, 24);
-        for (auto& b : pages) b.setBounds(tabs.removeFromLeft(74).withTrimmedRight(4));
+        auto tabs = head.withTrimmedLeft(130).removeFromLeft(6 * 62).withSizeKeepingCentre(6 * 62, 24);
+        for (auto& b : pages) b.setBounds(tabs.removeFromLeft(62).withTrimmedRight(4));
 
         auto area = getLocalBounds().reduced(20, 0).withTrimmedTop(kHeader).withTrimmedBottom(12);
         const int h = area.getHeight() / static_cast<int>(MensisProcessor::kNumTracks);
@@ -761,6 +955,7 @@ public:
         for (size_t t = 0; t < rows.size(); ++t)
             rows[t] = strips[t]->getBounds().withTrimmedTop(40).translated(-spacePanel.getX(), -spacePanel.getY());
         spacePanel.setRows(rows);
+        modPanel.setBounds(spacePanel.getBounds());
     }
 
     bool isInterestedInFileDrag(const juce::StringArray&) override { return true; }
@@ -814,7 +1009,15 @@ private:
     std::array<Knob, 5> globalKnobs;
     Knob volume;
     juce::TextButton reroll;
-    std::array<juce::TextButton, 5> pages; // LOOP / GRAINS / RESONATOR / COLOR / SPACE
+    std::array<juce::TextButton, 6> pages; // LOOP / GRAINS / RESO / COLOR / SPACE / MOD
     SpacePanel spacePanel{proc};
+    ModPanel modPanel{proc};
+    int mapArmed = -1; // mod slot waiting for a knob to be touched
+
+    void arm(int slot) {
+        mapArmed = slot;
+        modPanel.setArmed(slot);
+        repaint(); // header hint
+    }
     std::unique_ptr<juce::FileChooser> chooser;
 };

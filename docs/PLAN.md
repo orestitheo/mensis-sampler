@@ -141,3 +141,24 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
 - Applied as a time warp before everything else on a track (loop position, Chaos, BEAT), Warp only (in
   tape mode it would wobble the pitch). Beats-style hits use real elapsed time, so swung hits start late
   but play at their own speed and pitch. The grain cloud stays on real time.
+
+## Section 8 notes: Modulators + macros
+- 4 global MOD slots. Each: TYPE (LFO / Random / Env), RATE (1/16 .. 8 bars, synced), SHAPE, DEPTH
+  (-100..+100%), and one TARGET knob anywhere in Mensis. Params `mod1.type` `mod1.rate` `mod1.shape`
+  `mod1.depth` (..mod4). The target is saved in the plugin state (`mod1.target` = param ID), not a param.
+  - LFO: phase = host beats / RATE (locked to Live). SHAPE morphs sine -> triangle -> saw -> square.
+  - Random: a new seeded value every RATE (hash of seed, slot, step). SHAPE = smoothness (steps -> glides).
+  - Env: follows the loudness of the target's track (the whole mix for global targets). RATE = release,
+    SHAPE = sensitivity. Unipolar (0..1); LFO/Random are bipolar.
+  - Applied as: normalised target value + DEPTH x mod, clamped. Recomputed every 128 samples
+    (engine smoothing covers the steps). Same seed + same position = same modulation.
+- MAP: press MAP on a slot, then touch any knob: it becomes the target (DEPTH 0 jumps to +50%, so a
+  fresh mapping is heard at once). ✕ clears it. Modulated knobs
+  show a moving dot on their ring.
+- 4 fixed macros (global params, 0..100%), each one big musical move on all tracks:
+  - DESTROY: drive up, bits down, squash up, character toward fuzz.
+  - DRIFT: grain mix, spray, detune up.
+  - RING: resonator mix up, decay longer.
+  - SPACE: all sends up, size and feedback up.
+  Applied after modulation, in real units, clamped to each knob's range. Pure function in core (tested).
+- UI: MOD page with the 4 macros and the 4 slots (each with a small live scope of its signal).

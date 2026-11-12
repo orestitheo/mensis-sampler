@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "core/engine/Macros.h"
 
 namespace {
 
@@ -9,6 +10,9 @@ const juce::StringArray kGridNames{"1/32", "1/16", "1/8", "1/4"};
 constexpr std::array<double, 4> kGridBeats{0.125, 0.25, 0.5, 1.0};
 const juce::StringArray kFeelNames{"Grid", "Loose", "Free"};
 const juce::StringArray kDelayNames{"1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/4T", "1/8D", "1/4", "1/4D", "1/2", "1 bar"};
+const juce::StringArray kModTypeNames{"LFO", "Random", "Env"};
+const juce::StringArray kModRateNames{"1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars", "4 bars", "8 bars"};
+constexpr std::array<double, 8> kModRateBeats{0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0};
 constexpr std::array<double, 12> kDelayBeats{0.125, 1.0 / 6.0, 0.25, 1.0 / 3.0, 0.375, 0.5, 2.0 / 3.0, 0.75, 1.0, 1.5, 2.0, 4.0};
 
 // Param IDs are stable: never rename once used in Live (automation and presets would break).
@@ -151,6 +155,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"swing", 1}, "Swing",
                    juce::NormalisableRange<float>(50.0f, 75.0f), 50.0f,
                    text([](float v, int) { return juce::String(juce::roundToInt(v)) + "%"; })));
+    // Modulators (4 global slots) and the 4 fixed macros.
+    for (size_t m = 1; m <= MensisProcessor::kModSlots; ++m) {
+        auto id = [m](const char* name) { return juce::ParameterID{"mod" + juce::String(m) + "." + name, 1}; };
+        auto label = [m](const char* name) { return "Mod " + juce::String(m) + " " + name; };
+        layout.add(std::make_unique<juce::AudioParameterChoice>(id("type"), label("Type"), kModTypeNames, 0),
+                   std::make_unique<juce::AudioParameterChoice>(id("rate"), label("Rate"), kModRateNames, 4),
+                   std::make_unique<juce::AudioParameterFloat>(id("shape"), label("Shape"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, pct),
+                   std::make_unique<juce::AudioParameterFloat>(id("depth"), label("Depth"), juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f,
+                       text([](float v, int) { return (v > 0.005f ? "+" : "") + juce::String(juce::roundToInt(v * 100.0f)) + "%"; })));
+    }
+    for (const auto& [mid, name] : {std::pair{"macro.destroy", "Destroy"}, std::pair{"macro.drift", "Drift"},
+                                     std::pair{"macro.ring", "Ring"}, std::pair{"macro.space", "Space"}})
+        layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{mid, 1}, name,
+                                                               juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, pct));
+
     for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) // BEAT mode Chaos for sliced tracks
         layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{paramId(t, "beat"), 1},
                                                               "T" + juce::String(t + 1) + " Beat", false));
@@ -180,6 +199,21 @@ MensisProcessor::MensisProcessor()
     seedParam = params.getRawParameterValue("seed");
     masterDb = params.getRawParameterValue("master");
     swingParam = params.getRawParameterValue("swing");
+    for (size_t m = 0; m < kModSlots; ++m) {
+        auto raw = [&](const char* name) { return params.getRawParameterValue("mod" + juce::String(m + 1) + "." + name); };
+        modParams[m] = {raw("type"), raw("rate"), raw("shape"), raw("depth")};
+        modTargetIndex[m].store(-1);
+    }
+    macroParams = {params.getRawParameterValue("macro.destroy"), params.getRawParameterValue("macro.drift"),
+                   params.getRawParameterValue("macro.ring"), params.getRawParameterValue("macro.space")};
+    // Every knob, for modulation targets: the param, its raw value and which track it belongs to (-1 = global).
+    for (auto* p : getParameters())
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(p)) {
+            allParams.push_back(ranged);
+            allRaw.push_back(params.getRawParameterValue(ranged->getParameterID()));
+            const auto pid = ranged->getParameterID();
+            paramTrack.push_back(pid.startsWith("t") && pid[1] >= '1' && pid[1] <= '4' && pid[2] == '.' ? pid[1] - '1' : -1);
+        }
     for (size_t t = 0; t < kNumTracks; ++t) sendParams[t] = params.getRawParameterValue(paramId(t, "send"));
     spaceTime = params.getRawParameterValue("space.time");
     spaceFeedback = params.getRawParameterValue("space.feedback");
@@ -197,6 +231,7 @@ void MensisProcessor::prepareToPlay(double sampleRate, int maxBlock) {
     trackBuf.setSize(2, scratch);
     sendBuf.setSize(2, scratch);
     for (auto& s : sendGain) s.reset(sampleRate, 0.05);
+    for (auto& m : modulators) m.reset();
     masterGain.reset(sampleRate, 0.05); // 50 ms glide: no zipper noise or clicks
     masterGain.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(masterDb->load(), -60.0f));
 }
@@ -255,56 +290,87 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         midiNotes[static_cast<size_t>(i)] = static_cast<float>(heldNotes[static_cast<size_t>(numHeld - numMidiNotes + i)]);
 
     mensis::ChaosParams chaos;
-    chaos.gridBeats = kGridBeats[static_cast<size_t>(chaosGrid->load())];
-    const auto feel = static_cast<int>(chaosFeel->load());
     chaos.seed = seedOld;
     chaos.nextSeed = seedNew;
     chaos.switchBeats = seedSwitch;
 
-    // Each track's settings for this block.
-    std::array<mensis::LoopParams, kNumTracks> lps;
-    for (size_t t = 0; t < kNumTracks; ++t) {
-        const auto& tp = trackParams[t];
-        auto& lp = lps[t];
-        lp = {tp.start->load(), tp.length->load(), kBarValues[static_cast<size_t>(tp.bars->load())],
-              tp.reverse->load() > 0.5f, tp.level->load(), tp.pan->load(), tp.warp->load() > 0.5f, chaos};
-        lp.chaos.amount = chaosAmount->load() * tp.chaos->load();
-        lp.chaos.looseness = feel == 0 ? 0.0f : feel == 1 ? lp.chaos.amount : 1.0f; // Loose: drifts more as Chaos rises
-        lp.chaos.stream = static_cast<uint32_t>(t);
-        lp.pitch = tp.pitch->load();
-        lp.slice = tp.slice->load() > 0.5f;
-        lp.beat = tp.beat->load() > 0.5f;
-        lp.swing = (swingParam->load() - 50.0f) / 50.0f; // 50% = straight, 75% = 0.5
-        lp.on = tp.on->load() > 0.5f;
-        lp.res = {tp.resMix->load(), tp.resRoot->load(), static_cast<int>(tp.resChord->load()), tp.resDecay->load(),
-                  tp.resColor->load(), midiNotes, numMidiNotes};
-        lp.filter = {tp.fltCutoff->load(), tp.fltReso->load(), tp.fltMorph->load()};
-        const float crushRate = tp.colRate->load();
-        lp.color = {tp.colDrive->load(), tp.colChar->load(), tp.colBits->load(),
-                    crushRate >= 48000.0f ? 1e9f : crushRate, // knob at the top = off, at any host rate
-                    tp.colSquash->load(), tp.colTilt->load(), tp.colOut->load(), tp.colMix->load()};
-        lp.grains = {tp.grainMix->load(), tp.grainSize->load(), tp.grainDensity->load(), tp.grainSpray->load(),
-                     tp.grainDetune->load(), tp.grainReverse->load(), tp.grainWidth->load(),
-                     tp.grainFreeze->load() > 0.5f, lp.chaos.amount, seedNew, static_cast<uint32_t>(t)};
-        sendGain[t].setTargetValue(sendParams[t]->load());
-    }
-    const mensis::SpaceParams sp{kDelayBeats[static_cast<size_t>(spaceTime->load())], spaceFeedback->load(),
-                                 spaceBlend->load(), spaceSize->load(), spaceTone->load(),
-                                 juce::Decibels::decibelsToGain(spaceReturn->load(), -60.0f), spaceFreeze->load() > 0.5f};
-
     if (buffer.getNumChannels() >= 2) {
-        // In chunks that fit the scratch buffers. Each track renders into trackBuf, goes into the mix and,
+        // In chunks of at most 128 samples. Per chunk: run the modulators, build every track's settings
+        // (knob value, + modulation, + macros), render each track into trackBuf, add it to the mix and,
         // through its SEND, into the shared Space. The Space keeps running when Live stops, so tails ring out.
-        const int chunk = trackBuf.getNumSamples();
+        const int chunk = std::min(trackBuf.getNumSamples(), 128);
+        std::array<mensis::LoopParams, kNumTracks> lps;
         for (int off = 0; off < numSamples; off += chunk) {
             const int n = std::min(chunk, numSamples - off);
             const double chunkPpq = ppq + off * bpm / (60.0 * getSampleRate());
+
+            // Modulation: each slot moves its target's normalised value by DEPTH x signal.
+            std::array<std::atomic<float>*, kModSlots> modRaw{};
+            std::array<float, kModSlots> modValue{};
+            for (size_t m = 0; m < kModSlots; ++m) {
+                const int idx = modTargetIndex[m].load(std::memory_order_relaxed);
+                const auto& mp = modParams[m];
+                const mensis::ModParams params{static_cast<mensis::ModType>(static_cast<int>(mp.type->load())),
+                                               kModRateBeats[static_cast<size_t>(mp.rate->load())], mp.shape->load(),
+                                               seedNew, static_cast<uint32_t>(m)};
+                const int track = idx >= 0 ? paramTrack[static_cast<size_t>(idx)] : -1;
+                const float level = track >= 0 ? trackLevel[static_cast<size_t>(track)] : mixLevel;
+                const float v = modulators[m].next(params, chunkPpq, level, n / getSampleRate(), bpm);
+                modSignal[m].store(v, std::memory_order_relaxed);
+                if (idx < 0) continue;
+                auto* target = allParams[static_cast<size_t>(idx)];
+                const float norm = std::clamp(target->getValue() + mp.depth->load() * v, 0.0f, 1.0f);
+                modRaw[m] = allRaw[static_cast<size_t>(idx)];
+                modValue[m] = target->convertFrom0to1(norm);
+                modNorm[m].store(norm, std::memory_order_relaxed);
+            }
+            auto val = [&](const std::atomic<float>* raw) { // knob value, or its modulated value
+                for (size_t m = 0; m < kModSlots; ++m)
+                    if (modRaw[m] == raw) return modValue[m];
+                return raw->load();
+            };
+
+            chaos.gridBeats = kGridBeats[static_cast<size_t>(val(chaosGrid))];
+            const auto feel = static_cast<int>(val(chaosFeel));
+            const mensis::Macros macros{val(macroParams[0]), val(macroParams[1]), val(macroParams[2]), val(macroParams[3])};
+            for (size_t t = 0; t < kNumTracks; ++t) {
+                const auto& tp = trackParams[t];
+                auto& lp = lps[t];
+                lp = {val(tp.start), val(tp.length), kBarValues[static_cast<size_t>(val(tp.bars))],
+                      val(tp.reverse) > 0.5f, val(tp.level), val(tp.pan), val(tp.warp) > 0.5f, chaos};
+                lp.chaos.amount = val(chaosAmount) * val(tp.chaos);
+                lp.chaos.looseness = feel == 0 ? 0.0f : feel == 1 ? lp.chaos.amount : 1.0f; // Loose: drifts more as Chaos rises
+                lp.chaos.stream = static_cast<uint32_t>(t);
+                lp.pitch = val(tp.pitch);
+                lp.slice = val(tp.slice) > 0.5f;
+                lp.beat = val(tp.beat) > 0.5f;
+                lp.swing = (val(swingParam) - 50.0f) / 50.0f; // 50% = straight, 75% = 0.5
+                lp.on = val(tp.on) > 0.5f;
+                lp.res = {val(tp.resMix), val(tp.resRoot), static_cast<int>(val(tp.resChord)), val(tp.resDecay),
+                          val(tp.resColor), midiNotes, numMidiNotes};
+                lp.filter = {val(tp.fltCutoff), val(tp.fltReso), val(tp.fltMorph)};
+                lp.color = {val(tp.colDrive), val(tp.colChar), val(tp.colBits), val(tp.colRate),
+                            val(tp.colSquash), val(tp.colTilt), val(tp.colOut), val(tp.colMix)};
+                lp.grains = {val(tp.grainMix), val(tp.grainSize), val(tp.grainDensity), val(tp.grainSpray),
+                             val(tp.grainDetune), val(tp.grainReverse), val(tp.grainWidth),
+                             val(tp.grainFreeze) > 0.5f, lp.chaos.amount, seedNew, static_cast<uint32_t>(t)};
+                float send = val(sendParams[t]);
+                mensis::applyMacros(macros, lp, send);
+                if (lp.color.rateHz >= 48000.0f) lp.color.rateHz = 1e9f; // knob at the top = off, at any host rate
+                sendGain[t].setTargetValue(send);
+            }
+            mensis::SpaceParams sp{kDelayBeats[static_cast<size_t>(val(spaceTime))], val(spaceFeedback), val(spaceBlend),
+                                   val(spaceSize), val(spaceTone), juce::Decibels::decibelsToGain(val(spaceReturn), -60.0f),
+                                   val(spaceFreeze) > 0.5f};
+            mensis::applyMacros(macros, sp);
+
             sendBuf.clear(0, n);
             for (size_t t = 0; t < kNumTracks && playing; ++t) {
                 const auto* sample = liveSamples[t].load(std::memory_order_acquire);
-                if (sample == nullptr) continue;
+                if (sample == nullptr) { trackLevel[t] = 0.0f; continue; }
                 trackBuf.clear(0, n);
                 tracks[t].render(*sample, lps[t], chunkPpq, bpm, trackBuf, 0, n);
+                trackLevel[t] = std::max(trackBuf.getMagnitude(0, 0, n), trackBuf.getMagnitude(1, 0, n)); // feeds Env mods
                 for (int ch = 0; ch < 2; ++ch) buffer.addFrom(ch, off, trackBuf, ch, 0, n);
                 for (int i = 0; i < n; ++i) {
                     const float g = sendGain[t].getNextValue();
@@ -314,6 +380,7 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             }
             space.process(sendBuf.getWritePointer(0), sendBuf.getWritePointer(1), n, sp, bpm);
             for (int ch = 0; ch < 2; ++ch) buffer.addFrom(ch, off, sendBuf, ch, 0, n);
+            mixLevel = std::max(buffer.getMagnitude(0, off, n), buffer.getMagnitude(1, off, n));
         }
         for (size_t t = 0; t < kNumTracks && playing; ++t) {
             const auto* sample = liveSamples[t].load(std::memory_order_acquire);
@@ -389,6 +456,8 @@ void MensisProcessor::getStateInformation(juce::MemoryBlock& dest) {
     // shortcut: saves the file path, not the audio; if the file moves, the track loads empty
     for (size_t t = 0; t < kNumTracks; ++t)
         state.setProperty(paramId(t, "file"), getSampleFile(t).getFullPathName(), nullptr);
+    for (size_t m = 0; m < kModSlots; ++m)
+        state.setProperty("mod" + juce::String(m + 1) + ".target", getModTarget(m), nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
 }
 
@@ -402,6 +471,29 @@ void MensisProcessor::setStateInformation(const void* data, int sizeInBytes) {
         if (path.isNotEmpty()) loadSample(t, juce::File(path), false);
         else clearSample(t);
     }
+    for (size_t m = 0; m < kModSlots; ++m)
+        setModTarget(m, state.getProperty("mod" + juce::String(m + 1) + ".target").toString());
+}
+
+void MensisProcessor::setModTarget(size_t slot, const juce::String& paramIdToTarget) {
+    int idx = -1;
+    for (size_t i = 0; i < allParams.size(); ++i)
+        if (allParams[i]->getParameterID() == paramIdToTarget) idx = static_cast<int>(i);
+    modTargetIndex[slot].store(idx, std::memory_order_relaxed);
+}
+
+juce::String MensisProcessor::getModTarget(size_t slot) const {
+    const int idx = modTargetIndex[slot].load(std::memory_order_relaxed);
+    return idx >= 0 ? allParams[static_cast<size_t>(idx)]->getParameterID() : juce::String();
+}
+
+std::optional<float> MensisProcessor::getModulatedValue(const juce::RangedAudioParameter& p) const {
+    for (size_t m = 0; m < kModSlots; ++m) {
+        const int idx = modTargetIndex[m].load(std::memory_order_relaxed);
+        if (idx >= 0 && allParams[static_cast<size_t>(idx)] == &p && modParams[m].depth->load() != 0.0f)
+            return modNorm[m].load(std::memory_order_relaxed);
+    }
+    return std::nullopt;
 }
 
 juce::AudioProcessorEditor* MensisProcessor::createEditor() { return new MensisEditor(*this); }

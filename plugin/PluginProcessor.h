@@ -5,11 +5,14 @@
 #include <vector>
 #include "core/engine/LoopTrack.h"
 #include "core/engine/Space.h"
+#include "core/engine/Modulator.h"
+#include <optional>
 
 // Thin host wrapper: reads host tempo/position and params, hands them to core/.
 class MensisProcessor final : public juce::AudioProcessor {
 public:
     static constexpr size_t kNumTracks = 4;
+    static constexpr size_t kModSlots = 4;
 
     MensisProcessor();
 
@@ -22,6 +25,13 @@ public:
     // 0..1 where the track is playing in its sample, -1 when stopped or empty. Any thread.
     float getPlayPosition(size_t track) const { return playPos[track].load(std::memory_order_relaxed); }
     double getBars(size_t track) const; // the track's loop length in bars, any thread
+
+    // Modulation. Targets are param IDs ("" = none); set/get on the message thread.
+    void setModTarget(size_t slot, const juce::String& paramIdToTarget);
+    juce::String getModTarget(size_t slot) const;
+    float getModSignal(size_t slot) const { return modSignal[slot].load(std::memory_order_relaxed); } // any thread
+    // The modulated value (0..1) of a knob that is a mod target with non-zero depth, for drawing.
+    std::optional<float> getModulatedValue(const juce::RangedAudioParameter& p) const;
 
     // Grain cloud for drawing, any thread. env 0 = grain not playing; anchor -1 = cloud off.
     struct GrainDot { float x, env, pan; bool backwards; };
@@ -121,6 +131,17 @@ private:
     std::atomic<float>* seedParam = nullptr;
     std::atomic<float>* masterDb = nullptr;
     std::atomic<float>* swingParam = nullptr;
+    struct ModSlotParams { std::atomic<float>* type; std::atomic<float>* rate; std::atomic<float>* shape; std::atomic<float>* depth; };
+    std::array<ModSlotParams, kModSlots> modParams{};
+    std::array<std::atomic<float>*, 4> macroParams{};
+    std::array<mensis::Modulator, kModSlots> modulators;
+    std::array<std::atomic<int>, kModSlots> modTargetIndex{};
+    std::array<std::atomic<float>, kModSlots> modSignal{}, modNorm{};
+    std::vector<juce::RangedAudioParameter*> allParams; // fixed after construction
+    std::vector<std::atomic<float>*> allRaw;
+    std::vector<int> paramTrack;
+    std::array<float, kNumTracks> trackLevel{}; // audio thread: last chunk's peak per track, for Env mods
+    float mixLevel = 0.0f;
     std::array<std::atomic<float>*, kNumTracks> sendParams{};
     std::atomic<float>* spaceTime = nullptr;
     std::atomic<float>* spaceFeedback = nullptr;
