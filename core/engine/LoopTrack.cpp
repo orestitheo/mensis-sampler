@@ -8,6 +8,7 @@ void LoopTrack::prepare(double newSampleRate) {
     cloud.prepare(sampleRate);
     resonator.prepare(sampleRate);
     filter.prepare(sampleRate);
+    color.prepare(sampleRate);
     primed = false;
 }
 
@@ -174,6 +175,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
         }
         resonator.process(l, r, p.res);
         filter.process(l, r, p.filter);
+        color.process(l, r, p.color);
         const float b = pan.getNextValue();
         outL[i] += l * std::min(1.0f, 1.0f - b);
         outR[i] += r * std::min(1.0f, 1.0f + b);

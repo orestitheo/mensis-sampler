@@ -1,5 +1,6 @@
 #pragma once
 #include "Chaos.h"
+#include "Color.h"
 #include "Grains.h"
 #include "Resonator.h"
 #include "Sample.h"
@@ -21,6 +22,7 @@ struct LoopParams {
     bool on = true;        // off = fades out over 50 ms (track mute)
     ResonatorParams res;   // mix 0 = off
     FilterParams filter;   // defaults = open (bypassed)
+    ColorParams color;     // defaults = neutral (bypassed)
 };
 
 // One looping track. The play position comes straight from the host's beat position,
@@ -46,6 +48,7 @@ private:
     GrainCloud cloud;
     Resonator resonator;
     MorphFilter filter;
+    Color color;
 
     // The hits inside the loop region, rebuilt each block (fixed size: no allocation on the audio thread).
     // shortcut: max 512 hits per loop region; later ones are ignored

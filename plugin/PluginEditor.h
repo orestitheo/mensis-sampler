@@ -504,11 +504,19 @@ public:
             resKnobs[i].attach(*p.params.getParameter(id(resIds[i].first)), resIds[i].second);
             addChildComponent(resKnobs[i]);
         }
+        const std::array<std::pair<const char*, const char*>, 8> colorIds{{{"col.drive", "DRIVE"}, {"col.char", "CHARACTER"},
+            {"col.bits", "BITS"}, {"col.rate", "RATE"}, {"col.squash", "SQUASH"}, {"col.tilt", "TILT"},
+            {"col.out", "OUTPUT"}, {"col.mix", "MIX"}}};
+        for (size_t i = 0; i < colorKnobs.size(); ++i) {
+            colorKnobs[i].attach(*p.params.getParameter(id(colorIds[i].first)), colorIds[i].second);
+            addChildComponent(colorKnobs[i]);
+        }
     }
 
-    // 0 = LOOP knobs, 1 = GRAINS knobs, 2 = RESONATOR + filter. The waveform and track header stay.
+    // 0 = LOOP knobs, 1 = GRAINS knobs, 2 = RESONATOR + filter, 3 = COLOR. The waveform and track header stay.
     void setPage(int page) {
         for (auto& k : resKnobs) k.setVisible(page == 2);
+        for (auto& k : colorKnobs) k.setVisible(page == 3);
         for (auto& k : knobs) k.setVisible(page == 0);
         for (auto& t : toggles) t.button.setVisible(page == 0);
         for (auto& k : grainKnobs) k.setVisible(page == 1);
@@ -548,8 +556,10 @@ public:
             knobs[i].setBounds(col);
             grainKnobs[i].setBounds(col); // same columns, other page
             resKnobs[i].setBounds(col);
+            colorKnobs[i].setBounds(col);
         }
         resKnobs[7].setBounds(right.withWidth(60)); // 8th knob where the toggles are on the other pages
+        colorKnobs[7].setBounds(right.withWidth(60));
         right = right.withSizeKeepingCentre(right.getWidth() - 8, 74);
         freeze.button.setBounds(right.withHeight(22).reduced(4, 0));
         for (auto& t : toggles) {
@@ -576,7 +586,7 @@ private:
     std::array<Knob, 7> knobs;
     std::array<Toggle, 3> toggles;
     std::array<Knob, 7> grainKnobs;
-    std::array<Knob, 8> resKnobs;
+    std::array<Knob, 8> resKnobs, colorKnobs;
     Toggle freeze, power;
 };
 
@@ -609,8 +619,8 @@ public:
         };
         addAndMakeVisible(reroll);
 
-        const std::array<const char*, 3> pageNames{"LOOP", "GRAINS", "RESONATOR"};
-        for (int i = 0; i < 3; ++i) {
+        const std::array<const char*, 4> pageNames{"LOOP", "GRAINS", "RESONATOR", "COLOR"};
+        for (int i = 0; i < 4; ++i) {
             auto& b = pages[static_cast<size_t>(i)];
             b.setButtonText(pageNames[static_cast<size_t>(i)]);
             b.setRadioGroupId(1);
@@ -645,7 +655,7 @@ public:
         reroll.setBounds(head.removeFromRight(80).withSizeKeepingCentre(80, 24));
         head.removeFromRight(8);
         for (size_t i = globalKnobs.size(); i-- > 0;) globalKnobs[i].setBounds(head.removeFromRight(i == 0 ? 76 : 60));
-        auto tabs = head.withTrimmedLeft(180).removeFromLeft(3 * 92).withSizeKeepingCentre(3 * 92, 24);
+        auto tabs = head.withTrimmedLeft(170).removeFromLeft(4 * 92).withSizeKeepingCentre(4 * 92, 24);
         for (auto& b : pages) b.setBounds(tabs.removeFromLeft(92).withTrimmedRight(4));
 
         auto area = getLocalBounds().reduced(20, 0).withTrimmedTop(kHeader).withTrimmedBottom(12);
@@ -704,6 +714,6 @@ private:
     std::array<Knob, 4> globalKnobs;
     Knob volume;
     juce::TextButton reroll;
-    std::array<juce::TextButton, 3> pages; // LOOP / GRAINS / RESONATOR
+    std::array<juce::TextButton, 4> pages; // LOOP / GRAINS / RESONATOR / COLOR
     std::unique_ptr<juce::FileChooser> chooser;
 };

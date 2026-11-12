@@ -93,3 +93,18 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
   low-pass -> band-pass -> high-pass. Defaults (LP, 20 kHz, no reso) = bypassed, bit-identical.
 - Params per track: `t1.res.mix`, `res.root`, `res.chord`, `res.decay`, `res.color`, `flt.cutoff`,
   `flt.reso`, `flt.morph` (one Push bank of 8). UI: third page RESONATOR.
+
+## Section 6 notes: Color
+- Per track, after Resonator/Filter: Drive -> Bits -> Rate -> Squash -> Tilt -> Output, with MIX (dry/wet).
+- DRIVE 0..36 dB into a shaper; CHARACTER morphs warm (tanh) -> fuzz (hard clip, pushed harder).
+  The shaper uses first-order antiderivative anti-aliasing (ADAA), so hard drive on bright sounds doesn't
+  fold back as loud inharmonic junk. Level is compensated so turning DRIVE up doesn't just get louder.
+- BITS 16 -> 1 (16 = off), RATE (sample-rate reduction, sample-and-hold, 48 kHz = off down to 200 Hz):
+  aliasing here is the point.
+- SQUASH: one-knob compressor (threshold, ratio and make-up all from one value), stereo-linked,
+  instant attack (catches hits: a squash, not a punch), 50 ms release; make-up keeps -10 dBFS at its level.
+- TILT: dark <-> bright, +-6 dB each side of 800 Hz.
+- OUTPUT -12..+12 dB, MIX 0..100% (default 100%).
+- All neutral = bypassed, bit-identical. Drive/tilt/mix/output are smoothed.
+- Params per track: `t1.col.drive`, `col.char`, `col.bits`, `col.rate`, `col.squash`, `col.tilt`, `col.out`,
+  `col.mix` (one Push bank of 8). UI: COLOR page.

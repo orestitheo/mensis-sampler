@@ -87,6 +87,14 @@ private:
         std::atomic<float>* fltCutoff;
         std::atomic<float>* fltReso;
         std::atomic<float>* fltMorph;
+        std::atomic<float>* colDrive;
+        std::atomic<float>* colChar;
+        std::atomic<float>* colBits;
+        std::atomic<float>* colRate;
+        std::atomic<float>* colSquash;
+        std::atomic<float>* colTilt;
+        std::atomic<float>* colOut;
+        std::atomic<float>* colMix;
     };
     std::array<TrackParams, kNumTracks> trackParams{};
     std::array<mensis::LoopTrack, kNumTracks> tracks;

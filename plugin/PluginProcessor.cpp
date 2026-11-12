@@ -102,6 +102,30 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                            return juce::String(v < 0.5f ? "LP>BP " : "BP>HP ") + juce::String(juce::roundToInt(std::fmod(v * 2.0f, 1.0f) * 100.0f)) + "%";
                        })));
     }
+
+    // Color: one group of 8 per track.
+    for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) {
+        auto id = [t](const char* name) { return juce::ParameterID{paramId(t, name), 1}; };
+        auto label = [t](const char* name) { return "T" + juce::String(t + 1) + " " + name; };
+        juce::NormalisableRange<float> rate(200.0f, 48000.0f);
+        rate.setSkewForCentre(4000.0f);
+        layout.add(std::make_unique<juce::AudioParameterFloat>(id("col.drive"), label("Drive"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, pct),
+                   std::make_unique<juce::AudioParameterFloat>(id("col.char"), label("Character"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
+                       text([](float v, int) { return v < 0.02f ? juce::String("Warm") : v > 0.98f ? juce::String("Fuzz") : juce::String(juce::roundToInt(v * 100.0f)) + "%"; })),
+                   std::make_unique<juce::AudioParameterFloat>(id("col.bits"), label("Bits"), juce::NormalisableRange<float>(1.0f, 16.0f), 16.0f,
+                       text([](float v, int) { return v >= 16.0f ? juce::String("Off") : juce::String(v, 1) + " bit"; })),
+                   std::make_unique<juce::AudioParameterFloat>(id("col.rate"), label("Rate"), rate, 48000.0f,
+                       text([](float v, int) { return v >= 48000.0f ? juce::String("Off") : v < 1000.0f ? juce::String(juce::roundToInt(v)) + " Hz" : juce::String(v / 1000.0f, 1) + " kHz"; })),
+                   std::make_unique<juce::AudioParameterFloat>(id("col.squash"), label("Squash"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, pct),
+                   std::make_unique<juce::AudioParameterFloat>(id("col.tilt"), label("Tilt"), juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f,
+                       text([](float v, int) {
+                           if (std::abs(v) < 0.02f) return juce::String("Flat");
+                           return juce::String(v < 0.0f ? "Dark " : "Bright ") + juce::String(juce::roundToInt(std::abs(v) * 100.0f)) + "%";
+                       })),
+                   std::make_unique<juce::AudioParameterFloat>(id("col.out"), label("Color Out"), juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f,
+                       text([](float v, int) { return juce::String(v, 1) + " dB"; })),
+                   std::make_unique<juce::AudioParameterFloat>(id("col.mix"), label("Color Mix"), juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f, pct));
+    }
     return layout;
 }
 
@@ -116,7 +140,9 @@ MensisProcessor::MensisProcessor()
                           raw("grain.mix"), raw("grain.size"), raw("grain.density"), raw("grain.spray"),
                           raw("grain.detune"), raw("grain.reverse"), raw("grain.width"), raw("grain.freeze"), raw("on"),
                           raw("res.mix"), raw("res.root"), raw("res.chord"), raw("res.decay"), raw("res.color"),
-                          raw("flt.cutoff"), raw("flt.reso"), raw("flt.morph")};
+                          raw("flt.cutoff"), raw("flt.reso"), raw("flt.morph"),
+                          raw("col.drive"), raw("col.char"), raw("col.bits"), raw("col.rate"), raw("col.squash"),
+                          raw("col.tilt"), raw("col.out"), raw("col.mix")};
         playPos[t].store(-1.0f);
         grainAnchor[t].store(-1.0f);
     }
@@ -211,6 +237,10 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             lp.res = {tp.resMix->load(), tp.resRoot->load(), static_cast<int>(tp.resChord->load()), tp.resDecay->load(),
                       tp.resColor->load(), midiNotes, numMidiNotes};
             lp.filter = {tp.fltCutoff->load(), tp.fltReso->load(), tp.fltMorph->load()};
+            const float crushRate = tp.colRate->load();
+            lp.color = {tp.colDrive->load(), tp.colChar->load(), tp.colBits->load(),
+                        crushRate >= 48000.0f ? 1e9f : crushRate, // knob at the top = off, at any host rate
+                        tp.colSquash->load(), tp.colTilt->load(), tp.colOut->load(), tp.colMix->load()};
             lp.grains = {tp.grainMix->load(), tp.grainSize->load(), tp.grainDensity->load(), tp.grainSpray->load(),
                          tp.grainDetune->load(), tp.grainReverse->load(), tp.grainWidth->load(),
                          tp.grainFreeze->load() > 0.5f, lp.chaos.amount, seedNew, static_cast<uint32_t>(t)};

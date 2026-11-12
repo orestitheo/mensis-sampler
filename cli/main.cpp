@@ -13,7 +13,9 @@ static int usage() {
                  "                  [--grain-mix 0] [--grain-size 80] [--grain-density 20] [--grain-spray 0.2]\n"
                  "                  [--grain-detune 0] [--grain-reverse 0] [--grain-width 0.5]\n"
                  "                  [--res-mix 0] [--res-root 48] [--res-chord 0] [--res-decay 1] [--res-color 0]\n"
-                 "                  [--cutoff 20000] [--reso 0] [--morph 0]\n";
+                 "                  [--cutoff 20000] [--reso 0] [--morph 0]\n"
+                 "                  [--drive 0] [--char 0] [--bits 16] [--crush-rate 48000] [--squash 0] [--tilt 0]\n"
+                 "                  [--color-out 0] [--color-mix 1]\n";
     return 1;
 }
 
@@ -46,7 +48,9 @@ int main(int argc, char* argv[]) {
         {"--length", "1"}, {"--reverse", "0"}, {"--level", "-6"}, {"--pan", "0"}, {"--warp", "1"}, {"--chaos", "0"}, {"--seed", "1"}, {"--grid", "0.25"}, {"--loose", "0"}, {"--pitch", "0"}, {"--slice", "0"}, {"--grain-mix", "0"}, {"--grain-size", "80"}, {"--grain-density", "20"},
         {"--grain-spray", "0.2"}, {"--grain-detune", "0"}, {"--grain-reverse", "0"}, {"--grain-width", "0.5"},
         {"--res-mix", "0"}, {"--res-root", "48"}, {"--res-chord", "0"}, {"--res-decay", "1"}, {"--res-color", "0"},
-        {"--cutoff", "20000"}, {"--reso", "0"}, {"--morph", "0"}, {"--rate", "48000"}, {"--out", ""}};
+        {"--cutoff", "20000"}, {"--reso", "0"}, {"--morph", "0"},
+        {"--drive", "0"}, {"--char", "0"}, {"--bits", "16"}, {"--crush-rate", "48000"}, {"--squash", "0"}, {"--tilt", "0"},
+        {"--color-out", "0"}, {"--color-mix", "1"}, {"--rate", "48000"}, {"--out", ""}};
     for (int i = 3; i + 1 < argc; i += 2) {
         if (!opt.contains(argv[i])) return usage();
         opt[argv[i]] = argv[i + 1];
@@ -81,6 +85,8 @@ int main(int argc, char* argv[]) {
     params.res.decay = static_cast<float>(num("--res-decay"));
     params.res.color = static_cast<float>(num("--res-color"));
     params.filter = {static_cast<float>(num("--cutoff")), static_cast<float>(num("--reso")), static_cast<float>(num("--morph"))};
+    auto f = [&](const char* key) { return static_cast<float>(num(key)); };
+    params.color = {f("--drive"), f("--char"), f("--bits"), f("--crush-rate"), f("--squash"), f("--tilt"), f("--color-out"), f("--color-mix")};
     mensis::LoopTrack track;
     track.prepare(rate);
     juce::AudioBuffer<float> out(2, static_cast<int>(seconds * rate));
