@@ -65,6 +65,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                    std::make_unique<juce::AudioParameterFloat>(id("grain.width"), label("Width"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.5f, percent),
                    std::make_unique<juce::AudioParameterBool>(id("grain.freeze"), label("Freeze"), false));
     }
+    layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"master", 1}, "Volume",
+                   juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f, 2.5f), 0.0f, // skew: fine control near 0 dB
+                   juce::AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int) {
+                       return v <= -60.0f ? juce::String("-inf") : juce::String(v, 1) + " dB";
+                   })));
     return layout;
 }
 
@@ -85,10 +90,13 @@ MensisProcessor::MensisProcessor()
     chaosGrid = params.getRawParameterValue("chaos.grid");
     chaosFeel = params.getRawParameterValue("chaos.feel");
     seedParam = params.getRawParameterValue("seed");
+    masterDb = params.getRawParameterValue("master");
 }
 
 void MensisProcessor::prepareToPlay(double sampleRate, int) {
     for (auto& track : tracks) track.prepare(sampleRate);
+    masterGain.reset(sampleRate, 0.05); // 50 ms glide: no zipper noise or clicks
+    masterGain.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(masterDb->load(), -60.0f));
 }
 
 void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
@@ -151,6 +159,8 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             playPos[t].store(tracks[t].position(), std::memory_order_relaxed);
             publishGrains(t, sample, lp.grains.mix > 0.0f);
         }
+        masterGain.setTargetValue(juce::Decibels::decibelsToGain(masterDb->load(), -60.0f));
+        masterGain.applyGain(buffer, numSamples);
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch) // safety net: never send more than 0 dBFS to Live
             juce::FloatVectorOperations::clip(buffer.getWritePointer(ch), buffer.getReadPointer(ch), -1.0f, 1.0f, numSamples);
     }
@@ -203,6 +213,10 @@ void MensisProcessor::swapIn(size_t track, std::unique_ptr<mensis::Sample> sampl
 
     const auto done = blocksDone.load(std::memory_order_acquire);
     std::erase_if(retired, [done](const Retired& r) { return done > r.retiredAtBlock + 1; });
+}
+
+double MensisProcessor::getBars(size_t track) const {
+    return kBarValues[static_cast<size_t>(trackParams[track].bars->load())];
 }
 
 juce::File MensisProcessor::getSampleFile(size_t track) const {

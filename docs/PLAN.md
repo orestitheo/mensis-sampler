@@ -57,6 +57,8 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
   - Chaos Jump lands on a hit; Stutter repeats from the hit before it. Event timing stays on the grid.
   - With Warp: Beats-style playback. Each hit restarts at its own speed exactly when its time comes;
     the previous one fades out in 5 ms, and a hit's tail is gated before it runs into the next hit.
+    At a slower tempo a slice is stretched to fill its slot (no gaps): the attack plays untouched, the
+    rest with 60 ms grains reading slowly through the slice. Slices under 60 ms play straight.
     Pitch still works. Reverse falls back to grain warp.
   - Fades around Chaos jumps are 1 ms instead of 5 ms so hits keep their attack.
 - Waveform shows the slice markers when SLICE is on.

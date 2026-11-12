@@ -182,3 +182,36 @@ TEST_CASE("turning a track off fades it out without a click") {
     for (int i = 12000; i < 24000; ++i) tail = std::max(tail, std::abs(out.getSample(0, i)));
     CHECK(tail == 0.0f); // silent once faded
 }
+
+TEST_CASE("sliced + warp at a slower tempo stretches each slice to fill its slot (no quiet gaps)") {
+    // 2 s steady 440 Hz tone with 4 slices; at 80 BPM each slice's slot is 0.75 s but holds only 0.5 s of audio.
+    mensis::Sample s;
+    s.sampleRate = kRate;
+    s.audio.setSize(1, static_cast<int>(2.0 * kRate));
+    for (int i = 0; i < s.audio.getNumSamples(); ++i)
+        s.audio.setSample(0, i, 0.5f * std::sin(2.0f * juce::MathConstants<float>::pi * 440.0f * i / static_cast<float>(kRate)));
+    s.slices = {0, 24000, 48000, 72000};
+
+    mensis::LoopParams p;
+    p.levelDb = 0.0f;
+    p.warp = true;
+    p.slice = true;
+    mensis::LoopTrack track;
+    track.prepare(kRate);
+    constexpr double bpm = 80.0;
+    const int len = static_cast<int>(4.0 * 60.0 / bpm * kRate); // one loop = 3 s
+    juce::AudioBuffer<float> out(2, len);
+    out.clear();
+    for (int pos = 0; pos < len; pos += 512)
+        track.render(s, p, pos * bpm / (60.0 * kRate), bpm, out, pos, std::min(512, len - pos));
+
+    float quietest = 1.0f; // loudest sample in each 20 ms window, minimum over the loop
+    for (int w = 0; w + 960 <= len; w += 480) {
+        float m = 0.0f;
+        for (int i = w; i < w + 960; ++i) m = std::max(m, std::abs(out.getSample(0, i)));
+        quietest = std::min(quietest, m);
+    }
+    CHECK(quietest > 0.25f); // the old behaviour had 0.25 s of silence at the end of every slot
+    const auto stats = mensis::measure({out.getReadPointer(0), static_cast<size_t>(len)});
+    CHECK(stats.maxStep < 0.1f); // a 0.5 * 440 Hz sine steps ~0.029 per sample: no clicks
+}

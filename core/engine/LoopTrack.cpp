@@ -110,12 +110,35 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
             const auto idx = static_cast<size_t>(std::upper_bound(slicePhase.begin(), slicePhase.begin() + static_cast<std::ptrdiff_t>(numSlices), phase)
                                                  - slicePhase.begin()) - 1; // slicePhase[0] == 0, so idx >= 0
             auto voice = [&](size_t s, double sincePhase, double amp) {
-                const double at = slicePos[s] + sincePhase * filePerPhase;
                 const double end = s + 1 < numSlices ? slicePos[s + 1] : regionStart + regionLen;
-                const double gate = std::clamp((end - at) / srcFade, 0.0, 1.0); // stop before the next hit's audio
-                if (gate <= 0.0 || at < 0.0) return;
-                l += static_cast<float>(amp * gate) * read(srcL, at);
-                r += static_cast<float>(amp * gate) * read(srcR, at);
+                auto play = [&](double at, double a) {
+                    const double gate = std::clamp((end - at) / srcFade, 0.0, 1.0); // stop before the next hit's audio
+                    if (gate <= 0.0 || at < 0.0) return;
+                    l += static_cast<float>(a * gate) * read(srcL, at);
+                    r += static_cast<float>(a * gate) * read(srcR, at);
+                };
+                const double tau = sincePhase * secondsPerPhase;                                  // seconds into the slot
+                const double slot = ((s + 1 < numSlices ? slicePhase[s + 1] : 1.0) - slicePhase[s]) * secondsPerPhase;
+                const double speed = filePerPhase / secondsPerPhase;                              // file samples per second
+                const double fill = (end - slicePos[s]) / std::max(1e-6, slot); // speed that spreads the slice over its slot
+                constexpr double hopSec = 0.03;
+                const double lastStart = end - 2.0 * hopSec * speed; // a grain starting later would run past the slice
+                if (fill >= speed || lastStart <= slicePos[s]) { // fills its slot, or too short to stretch: play straight
+                    play(slicePos[s] + tau * speed, amp);
+                    return;
+                }
+                // Slot is longer than the hit: stretch it with grains so it fills the slot without going quiet.
+                // Grain j starts every 30 ms at the slowly moving spot slicePos + j*hop*fill and plays at normal
+                // speed (pitch kept). Grain 0 starts at full level, so the attack stays crisp. The last grains
+                // start early enough to fit inside the slice, so the end of the slot doesn't fade.
+                const double k = std::floor(tau / hopSec);
+                for (double j : {k, k - 1.0}) {
+                    if (j < 0.0) continue;
+                    const double age = tau - j * hopSec; // 0 .. 2 hops
+                    const double sn = std::sin(juce::MathConstants<double>::pi * age / (2.0 * hopSec));
+                    const double w = j == 0.0 && age < hopSec ? 1.0 : sn * sn; // sin^2 windows sum to exactly 1
+                    play(std::min(slicePos[s] + j * hopSec * fill, lastStart) + age * speed, amp * w);
+                }
             };
             const double since = (phase - slicePhase[idx]) * secondsPerPhase; // seconds since this hit's time
             voice(idx, phase - slicePhase[idx], std::min(1.0, since / 0.001));

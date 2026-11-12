@@ -92,46 +92,80 @@ public:
             g.drawText("DROP A SAMPLE", b, juce::Justification::centred);
             return;
         }
-        if (sample != peaksFor || static_cast<int>(peaks.size()) != getWidth()) buildPeaks(*sample);
+        if (sample != mipFor) buildMip(*sample);
+        if (v0 != colsV0 || v1 != colsV1 || static_cast<int>(cols.size()) != getWidth()) buildColumns(*sample);
 
         const auto [st, en] = region();
-        const float w = b.getWidth(), mid = b.getCentreY(), half = b.getHeight() * 0.5f - 2.0f;
-        g.setColour(MensisLook::fg.withAlpha(grab == Grab::New ? 0.16f : 0.08f));
-        g.fillRect(b.withX(st * w).withRight(en * w));
-        for (size_t x = 0; x < peaks.size(); ++x) {
-            const float fx = static_cast<float>(x) / w;
-            g.setColour(fx >= st && fx <= en ? MensisLook::fg : MensisLook::dim); // only the loop region is lit
-            g.drawVerticalLine(static_cast<int>(x), mid - peaks[x] * half, mid + peaks[x] * half);
+        const float w = b.getWidth(), h = b.getHeight(), mid = b.getCentreY(), half = h * 0.5f - 4.0f;
+        const float sx = toX(st), ex = toX(en);
+
+        // Loop region: a soft wash, brighter at the top.
+        const float wash = grab == Grab::New ? 0.16f : 0.09f;
+        g.setGradientFill(juce::ColourGradient(MensisLook::fg.withAlpha(wash), 0.0f, 0.0f,
+                                               MensisLook::fg.withAlpha(wash * 0.25f), 0.0f, h, false));
+        g.fillRect(juce::Rectangle<float>(sx, 0.0f, ex - sx, h).getIntersection(b));
+        drawBeatTicks(g, sx, ex);
+        g.setColour(MensisLook::dim.withAlpha(0.6f));
+        g.drawHorizontalLine(static_cast<int>(mid), 0.0f, w); // centre line
+
+        // Waveform: faint outline = peaks, solid core = body (RMS). Outside the loop it stays dark.
+        const double spp = (v1 - v0) * (sample->audio.getNumSamples() - 1) / std::max(1.0f, w); // samples per pixel
+        if (spp >= 1.5) {
+            for (size_t x = 0; x < cols.size(); ++x) {
+                const auto fx = static_cast<float>(x);
+                const bool lit = fx >= sx && fx <= ex;
+                g.setColour(lit ? MensisLook::fg.withAlpha(0.4f) : MensisLook::dim);
+                g.drawVerticalLine(static_cast<int>(x), mid - cols[x].peak * half, mid + cols[x].peak * half);
+                g.setColour(lit ? MensisLook::fg : MensisLook::mid.withAlpha(0.5f));
+                g.drawVerticalLine(static_cast<int>(x), mid - cols[x].rms * half, mid + cols[x].rms * half);
+            }
+        } else {
+            drawSampleLine(g, *sample, mid, half, sx, ex, spp);
         }
+
         if (value("slice") > 0.5f) { // hit markers inside the loop region: thin line + a tick at the bottom
             const float n = static_cast<float>(std::max(1, sample->audio.getNumSamples() - 1));
             for (int onset : sample->slices) {
                 const float fx = static_cast<float>(onset) / n;
                 if (fx <= st || fx >= en) continue; // only the region gets sliced
-                const float x = fx * w;
+                const float x = toX(fx);
                 g.setColour(MensisLook::fg.withAlpha(0.3f));
-                g.drawVerticalLine(static_cast<int>(x), 0.0f, b.getHeight());
+                g.drawVerticalLine(static_cast<int>(x), 0.0f, h);
                 g.setColour(MensisLook::fg);
-                g.fillRect(x - 0.5f, b.getHeight() - 6.0f, 2.0f, 6.0f);
+                g.fillRect(x - 0.5f, h - 6.0f, 2.0f, 6.0f);
             }
         }
-        for (const auto [edge, x] : {std::pair{Grab::Start, st * w}, std::pair{Grab::End, en * w - 2.0f}}) {
+        for (const auto [edge, x] : {std::pair{Grab::Start, sx}, std::pair{Grab::End, ex - 2.0f}}) {
             const bool active = grab == edge || (grab == Grab::None && hover == edge);
             g.setColour(active ? MensisLook::fg : MensisLook::fg.withAlpha(0.7f));
-            g.fillRect(x, 0.0f, active ? 3.0f : 2.0f, b.getHeight());
+            g.fillRect(x, 0.0f, active ? 3.0f : 2.0f, h);
             // small tab at the top, pointing into the region, so the edges look grabbable
             g.fillRect(edge == Grab::Start ? x : x - 6.0f, 0.0f, 8.0f, 10.0f);
         }
         drawCloud(g, b, *sample);
         if (const float pos = proc.getPlayPosition(track); pos >= 0.0f) {
+            // Playhead with a soft glow trailing behind it.
+            const float x = toX(pos), trail = value("reverse") > 0.5f ? 28.0f : -28.0f;
+            g.setGradientFill(juce::ColourGradient(MensisLook::fg.withAlpha(0.28f), x, 0.0f,
+                                                   MensisLook::fg.withAlpha(0.0f), x + trail, 0.0f, false));
+            g.fillRect(juce::Rectangle<float>(std::min(x, x + trail), 0.0f, std::abs(trail), h));
             g.setColour(MensisLook::fg);
-            g.fillRect(pos * w - 0.5f, 0.0f, 1.0f, b.getHeight());
-            g.fillEllipse(pos * w - 3.0f, -3.0f, 6.0f, 6.0f);
+            g.fillRect(x - 0.5f, 0.0f, 1.0f, h);
+            g.fillEllipse(x - 3.0f, -3.0f, 6.0f, 6.0f);
+        }
+        if (v1 - v0 < 0.999) { // zoomed in: thin overview along the bottom, white = what you're looking at
+            g.setColour(MensisLook::dim);
+            g.fillRect(0.0f, h - 2.0f, w, 2.0f);
+            g.setColour(MensisLook::mid);
+            g.fillRect(st * w, h - 2.0f, (en - st) * w, 2.0f);
+            g.setColour(MensisLook::fg);
+            g.fillRect(static_cast<float>(v0) * w, h - 2.0f, std::max(2.0f, static_cast<float>(v1 - v0) * w), 2.0f);
         }
     }
 
     // Drag anywhere: the part you sweep over becomes the loop. Drag an edge: resize that side.
-    // Double-click: the whole sample.
+    // Double-click: the whole sample, zoomed out. Scroll/pinch: zoom around the mouse.
+    // Sideways scroll or Shift+scroll: move along the sample.
     void mouseMove(const juce::MouseEvent& e) override {
         const Grab g = proc.getSample(track) == nullptr ? Grab::None : grabAt(e.position.x);
         setMouseCursor(g == Grab::Start || g == Grab::End ? juce::MouseCursor::LeftRightResizeCursor
@@ -177,6 +211,22 @@ public:
         apply(0.0f, 1.0f);
         param("start")->endChangeGesture();
         param("length")->endChangeGesture();
+        setView(0.0, 1.0);
+    }
+
+    void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override {
+        if (proc.getSample(track) == nullptr) return;
+        const float sideways = e.mods.isShiftDown() ? wheel.deltaY : wheel.deltaX;
+        if (std::abs(sideways) > std::abs(e.mods.isShiftDown() ? 0.0f : wheel.deltaY)) {
+            const double span = v1 - v0, shift = -sideways * span;
+            setView(v0 + shift, v1 + shift);
+        } else {
+            zoomAround(e.position.x, std::exp(-wheel.deltaY * 2.0));
+        }
+    }
+
+    void mouseMagnify(const juce::MouseEvent& e, float scale) override {
+        if (proc.getSample(track) != nullptr) zoomAround(e.position.x, 1.0 / std::max(0.01f, scale));
     }
 
 private:
@@ -189,25 +239,93 @@ private:
         const float st = value("start");
         return {st, st + value("length") * (1.0f - st)};
     }
+
+    // --- zoom: the view shows [v0, v1] of the sample (0..1) ---
+    float toX(float norm) const { return static_cast<float>((norm - v0) / (v1 - v0)) * static_cast<float>(getWidth()); }
+    float fromX(float px) const {
+        return std::clamp(static_cast<float>(v0 + px / std::max(1, getWidth()) * (v1 - v0)), 0.0f, 1.0f);
+    }
+    void zoomAround(float px, double factor) {
+        const auto* sample = proc.getSample(track);
+        const double c = fromX(px), span = v1 - v0;
+        // Closest zoom: 10 pixels per sample.
+        const double minSpan = std::min(1.0, 0.1 * getWidth() / std::max(1, sample->audio.getNumSamples() - 1));
+        const double next = std::clamp(span * factor, minSpan, 1.0);
+        const double a = c - (c - v0) * next / span;
+        setView(a, a + next);
+    }
+    void setView(double a, double z) {
+        const double span = z - a;
+        a = std::clamp(a, 0.0, 1.0 - span); // slide back inside the sample
+        v0 = a;
+        v1 = a + span;
+        repaint();
+    }
+
+    void drawBeatTicks(juce::Graphics& g, float sx, float ex) const {
+        // One tick per beat across the top of the loop region, longer on each bar.
+        const double beats = proc.getBars(track) * 4.0;
+        const double px = (ex - sx) / beats;
+        if (px < 3.0) return; // too dense to read
+        for (int k = 1; k < static_cast<int>(beats); ++k) {
+            const float x = sx + static_cast<float>(k * px);
+            const bool bar = k % 4 == 0;
+            g.setColour(MensisLook::fg.withAlpha(bar ? 0.7f : 0.35f));
+            g.fillRect(x - 0.5f, 0.0f, 1.0f, bar ? 7.0f : 4.0f);
+        }
+    }
+
+    void drawSampleLine(juce::Graphics& g, const mensis::Sample& sample, float mid, float half, float sx, float ex,
+                        double spp) const {
+        // Zoomed all the way in: the actual wave, as a line through the samples (dots on each sample when close).
+        const int n = sample.audio.getNumSamples();
+        const int a = std::max(0, static_cast<int>(v0 * (n - 1)) - 1), z = std::min(n - 1, static_cast<int>(v1 * (n - 1)) + 2);
+        const int chs = sample.audio.getNumChannels();
+        auto valueAt = [&](int i) {
+            float m = 0.0f;
+            for (int ch = 0; ch < chs; ++ch) m += sample.audio.getSample(ch, i);
+            return m / static_cast<float>(chs);
+        };
+        auto pointAt = [&](int i) {
+            return juce::Point<float>(toX(static_cast<float>(i) / static_cast<float>(n - 1)), mid - valueAt(i) * half);
+        };
+        juce::Path line;
+        line.startNewSubPath(pointAt(a));
+        for (int i = a + 1; i <= z; ++i) line.lineTo(pointAt(i));
+        g.setColour(MensisLook::dim);
+        g.strokePath(line, juce::PathStrokeType(1.5f));
+        g.saveState();
+        g.reduceClipRegion(juce::Rectangle<float>(sx, 0.0f, ex - sx, static_cast<float>(getHeight())).toNearestInt());
+        g.setColour(MensisLook::fg);
+        g.strokePath(line, juce::PathStrokeType(1.5f));
+        if (spp < 0.25)
+            for (int i = a; i <= z; ++i) {
+                const auto p = pointAt(i);
+                g.fillEllipse(p.x - 2.0f, p.y - 2.0f, 4.0f, 4.0f);
+            }
+        g.restoreState();
+    }
+
     // The grain cloud: one dot per grain at the spot it reads, higher = panned left, lower = right.
-    // Dots swell and fade with the grain's window and leave a short trail; backwards grains are rings.
-    // Under it: the spray range as a thin bar, and when frozen a dotted line with a diamond on top.
+    // Dots swell and fade with the grain's window, glow softly and leave a short trail; backwards grains
+    // are rings. Under it: the spray range as a thin bar, and when frozen a dotted line with a diamond on top.
     void drawCloud(juce::Graphics& g, juce::Rectangle<float> b, const mensis::Sample& sample) const {
         const float anchor = proc.getGrainAnchor(track);
         if (anchor < 0.0f) return; // cloud off
-        const float w = b.getWidth(), h = b.getHeight(), mid = b.getCentreY();
+        const float h = b.getHeight(), mid = b.getCentreY();
 
-        const float ax = anchor * w;
+        const float ax = toX(anchor);
         const float spray = value("grain.spray") * 0.5f * static_cast<float>(sample.sampleRate)
-                            / static_cast<float>(std::max(1, sample.audio.getNumSamples())) * w;
+                            / static_cast<float>(std::max(1, sample.audio.getNumSamples()))
+                            / static_cast<float>(v1 - v0) * b.getWidth();
         g.setColour(MensisLook::fg.withAlpha(0.25f));
-        g.fillRect(juce::Rectangle<float>(ax - spray, h - 3.0f, 2.0f * spray, 1.0f).getIntersection(b));
+        g.fillRect(juce::Rectangle<float>(ax - spray, h - 6.0f, 2.0f * spray, 1.0f).getIntersection(b));
         g.setColour(MensisLook::fg.withAlpha(0.6f));
-        g.fillRect(ax - 0.5f, h - 5.0f, 1.0f, 5.0f); // where the cloud is centred
+        g.fillRect(ax - 0.5f, h - 9.0f, 1.0f, 5.0f); // where the cloud is centred
 
         if (value("grain.freeze") > 0.5f) {
             g.setColour(MensisLook::fg);
-            for (float y = 10.0f; y < h - 6.0f; y += 5.0f) g.fillRect(ax - 0.5f, y, 1.0f, 2.0f);
+            for (float y = 10.0f; y < h - 10.0f; y += 5.0f) g.fillRect(ax - 0.5f, y, 1.0f, 2.0f);
             juce::Path diamond;
             diamond.addQuadrilateral(ax, 1.0f, ax + 4.0f, 5.0f, ax, 9.0f, ax - 4.0f, 5.0f);
             g.fillPath(diamond);
@@ -216,9 +334,14 @@ private:
         for (size_t i = 0; i < MensisProcessor::kMaxGrains; ++i) {
             const auto d = proc.getGrainDot(track, i);
             if (d.env <= 0.01f) continue;
-            const float x = d.x * w, y = mid - d.pan * (h * 0.5f - 8.0f);
+            const float x = toX(d.x), y = mid - d.pan * (h * 0.5f - 10.0f);
             const float r = 1.5f + 2.5f * d.env;
-            const float trail = 10.0f * d.env * (d.backwards ? 1.0f : -1.0f); // behind the dot
+            // halo
+            g.setGradientFill(juce::ColourGradient(MensisLook::fg.withAlpha(0.18f * d.env), x, y,
+                                                   MensisLook::fg.withAlpha(0.0f), x + r * 3.5f, y, true));
+            g.fillEllipse(x - r * 3.5f, y - r * 3.5f, r * 7.0f, r * 7.0f);
+            // trail
+            const float trail = 12.0f * d.env * (d.backwards ? 1.0f : -1.0f);
             g.setGradientFill(juce::ColourGradient(MensisLook::fg.withAlpha(0.5f * d.env), x, y,
                                                    MensisLook::fg.withAlpha(0.0f), x + trail, y, false));
             g.fillRect(juce::Rectangle<float>(std::min(x, x + trail), y - 0.5f, std::abs(trail), 1.0f));
@@ -232,8 +355,7 @@ private:
 
     Grab grabAt(float px) const {
         const auto [st, en] = region();
-        const float w = static_cast<float>(getWidth());
-        const float ds = std::abs(px - st * w), de = std::abs(px - en * w);
+        const float ds = std::abs(px - toX(st)), de = std::abs(px - toX(en));
         if (std::min(ds, de) <= 6.0f) return ds < de ? Grab::Start : Grab::End; // 6 px grab zone per edge
         return Grab::New;
     }
@@ -245,25 +367,66 @@ private:
         set("length", std::clamp((en - st) / (1.0f - st), 0.01f, 1.0f));
     }
 
-    float xNorm(const juce::MouseEvent& e) const {
-        return std::clamp(e.position.x / static_cast<float>(std::max(1, getWidth())), 0.0f, 1.0f);
+    float xNorm(const juce::MouseEvent& e) const { return fromX(e.position.x); }
+
+    // Overview of the sample in blocks of 256: loudest sample and sum of squares, built once per sample,
+    // so drawing any zoom level stays fast even for long samples.
+    static constexpr int kBlock = 256;
+    void buildMip(const mensis::Sample& sample) {
+        mipFor = &sample;
+        const int n = sample.audio.getNumSamples(), chs = sample.audio.getNumChannels();
+        const auto blocks = static_cast<size_t>((n + kBlock - 1) / kBlock);
+        blockPeak.assign(blocks, 0.0f);
+        blockSq.assign(blocks, 0.0);
+        for (int ch = 0; ch < chs; ++ch) {
+            const float* d = sample.audio.getReadPointer(ch);
+            for (int i = 0; i < n; ++i) {
+                const auto k = static_cast<size_t>(i / kBlock);
+                blockPeak[k] = std::max(blockPeak[k], std::abs(d[i]));
+                blockSq[k] += static_cast<double>(d[i]) * d[i] / chs;
+            }
+        }
+        colsV0 = -1.0; // force new columns
     }
 
-    void buildPeaks(const mensis::Sample& sample) { // biggest |level| per pixel column, rebuilt on load/resize
-        peaksFor = &sample;
-        peaks.assign(static_cast<size_t>(std::max(0, getWidth())), 0.0f);
-        const int n = sample.audio.getNumSamples();
-        for (size_t x = 0; x < peaks.size(); ++x) {
-            const int a = static_cast<int>(x * n / peaks.size()), z = static_cast<int>((x + 1) * n / peaks.size());
-            for (int ch = 0; ch < sample.audio.getNumChannels(); ++ch)
-                peaks[x] = std::max(peaks[x], sample.audio.getMagnitude(ch, a, std::max(1, z - a)));
+    void buildColumns(const mensis::Sample& sample) {
+        colsV0 = v0;
+        colsV1 = v1;
+        cols.assign(static_cast<size_t>(std::max(0, getWidth())), {});
+        const int n = sample.audio.getNumSamples(), chs = sample.audio.getNumChannels();
+        for (size_t x = 0; x < cols.size(); ++x) {
+            const int a = static_cast<int>(fromX(static_cast<float>(x)) * (n - 1));
+            const int z = std::max(a + 1, static_cast<int>(fromX(static_cast<float>(x + 1)) * (n - 1)));
+            float peak = 0.0f;
+            double sq = 0.0;
+            if (z - a >= 2 * kBlock) { // wide column: use the blocks
+                for (int k = a / kBlock; k <= std::min((z - 1) / kBlock, static_cast<int>(blockPeak.size()) - 1); ++k) {
+                    peak = std::max(peak, blockPeak[static_cast<size_t>(k)]);
+                    sq += blockSq[static_cast<size_t>(k)];
+                }
+                sq /= ((z - 1) / kBlock - a / kBlock + 1) * kBlock;
+            } else {
+                for (int i = a; i < std::min(z, n); ++i)
+                    for (int ch = 0; ch < chs; ++ch) {
+                        const float v = sample.audio.getSample(ch, i);
+                        peak = std::max(peak, std::abs(v));
+                        sq += static_cast<double>(v) * v / chs;
+                    }
+                sq /= std::max(1, std::min(z, n) - a);
+            }
+            cols[x] = {peak, std::min(peak, static_cast<float>(std::sqrt(sq)))};
         }
     }
 
+    struct Column { float peak = 0.0f, rms = 0.0f; };
     MensisProcessor& proc;
     size_t track;
-    const mensis::Sample* peaksFor = nullptr;
-    std::vector<float> peaks;
+    double v0 = 0.0, v1 = 1.0;           // zoom view
+    const mensis::Sample* mipFor = nullptr;
+    std::vector<float> blockPeak;
+    std::vector<double> blockSq;
+    std::vector<Column> cols;
+    double colsV0 = -1.0, colsV1 = -1.0;
     Grab grab = Grab::None, hover = Grab::None;
     float downStart = 0.0f, downEnd = 1.0f, downX = 0.0f;
 };
@@ -370,6 +533,7 @@ public:
 
         auto right = area.removeFromRight(9 * 60);
         wave.setBounds(area.withTrimmedRight(16));
+        right = right.withSizeKeepingCentre(right.getWidth(), std::min(right.getHeight(), 96)); // knobs stay knob-sized
         for (size_t i = 0; i < knobs.size(); ++i) {
             const auto col = right.removeFromLeft(60);
             knobs[i].setBounds(col);
@@ -420,6 +584,8 @@ public:
             globalKnobs[i].attach(*p.params.getParameter(globalIds[i].first), globalIds[i].second);
             addAndMakeVisible(globalKnobs[i]);
         }
+        volume.attach(*p.params.getParameter("master"), "VOLUME");
+        addAndMakeVisible(volume);
         reroll.setButtonText("RE-ROLL");
         reroll.onClick = [this] { // new seed; the audio switches to it at the next bar
             auto* seed = proc.params.getParameter("seed");
@@ -442,7 +608,7 @@ public:
         }
         pages[0].setToggleState(true, juce::dontSendNotification);
         sendLookAndFeelChange(); // the strips were built before they had a parent; restyle their knob value boxes
-        setSize(1040, 640);
+        setSize(1040, 840); // tall strips: room for a big waveform
         timerCallback();
         startTimerHz(30); // moves the playheads; also picks up samples restored from a saved Live set
     }
@@ -462,6 +628,8 @@ public:
 
     void resized() override {
         auto head = getLocalBounds().reduced(20, 0).removeFromTop(kHeader).reduced(0, 12);
+        volume.setBounds(head.removeFromRight(70)); // master, far right
+        head.removeFromRight(20);
         reroll.setBounds(head.removeFromRight(80).withSizeKeepingCentre(80, 24));
         head.removeFromRight(8);
         for (size_t i = globalKnobs.size(); i-- > 0;) globalKnobs[i].setBounds(head.removeFromRight(i == 0 ? 76 : 60));
@@ -522,6 +690,7 @@ private:
     MensisProcessor& proc;
     std::array<std::unique_ptr<TrackStrip>, MensisProcessor::kNumTracks> strips;
     std::array<Knob, 4> globalKnobs;
+    Knob volume;
     juce::TextButton reroll;
     std::array<juce::TextButton, 2> pages; // LOOP / GRAINS
     std::unique_ptr<juce::FileChooser> chooser;

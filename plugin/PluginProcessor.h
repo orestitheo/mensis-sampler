@@ -20,6 +20,7 @@ public:
     const mensis::Sample* getSample(size_t track) const { return ownedSamples[track].get(); } // message thread only
     // 0..1 where the track is playing in its sample, -1 when stopped or empty. Any thread.
     float getPlayPosition(size_t track) const { return playPos[track].load(std::memory_order_relaxed); }
+    double getBars(size_t track) const; // the track's loop length in bars, any thread
 
     // Grain cloud for drawing, any thread. env 0 = grain not playing; anchor -1 = cloud off.
     struct GrainDot { float x, env, pan; bool backwards; };
@@ -100,6 +101,8 @@ private:
     std::atomic<float>* chaosGrid = nullptr;
     std::atomic<float>* chaosFeel = nullptr;
     std::atomic<float>* seedParam = nullptr;
+    std::atomic<float>* masterDb = nullptr;
+    juce::SmoothedValue<float> masterGain{1.0f};
     uint32_t seedOld = 0, seedNew = 0; // audio thread only
     double seedSwitch = -1e300;
     bool seedStarted = false;
