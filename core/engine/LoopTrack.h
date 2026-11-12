@@ -1,5 +1,6 @@
 #pragma once
 #include "Chaos.h"
+#include "Grains.h"
 #include "Sample.h"
 
 namespace mensis {
@@ -15,6 +16,7 @@ struct LoopParams {
     ChaosParams chaos;     // amount 0 = plays clean
     float pitch = 0.0f;    // semitones; Warp only (in tape mode the speed sets the pitch)
     bool slice = false;    // Chaos snaps to the sample's hits; with Warp, hits play Beats-style
+    GrainParams grains;    // mix 0 = off
 };
 
 // One looping track. The play position comes straight from the host's beat position,
@@ -30,12 +32,14 @@ public:
 
     // Where the last rendered sample was read, 0..1 of the whole sample (for the playhead in the UI).
     float position() const { return lastPos; }
+    const GrainCloud& grains() const { return cloud; }
 
 private:
     double sampleRate = 48000.0;
     float lastPos = 0.0f;
     bool primed = false; // first render jumps straight to the param values instead of gliding from 0
-    juce::SmoothedValue<float> start, length, gain, pan, pitchRatio;
+    juce::SmoothedValue<float> start, length, gain, pan, pitchRatio, grainMix;
+    GrainCloud cloud;
 
     // The hits inside the loop region, rebuilt each block (fixed size: no allocation on the audio thread).
     // shortcut: max 512 hits per loop region; later ones are ignored

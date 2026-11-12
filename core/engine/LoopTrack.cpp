@@ -4,7 +4,8 @@ namespace mensis {
 
 void LoopTrack::prepare(double newSampleRate) {
     sampleRate = newSampleRate;
-    for (auto* v : {&start, &length, &gain, &pan, &pitchRatio}) v->reset(sampleRate, 0.05); // 50 ms glide, no zipper noise
+    for (auto* v : {&start, &length, &gain, &pan, &pitchRatio, &grainMix}) v->reset(sampleRate, 0.05); // 50 ms glide, no zipper noise
+    cloud.prepare(sampleRate);
     primed = false;
 }
 
@@ -17,6 +18,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
         gain.setCurrentAndTargetValue(targetGain);
         pan.setCurrentAndTargetValue(p.pan);
         pitchRatio.setCurrentAndTargetValue(std::exp2(p.pitch / 12.0f));
+        grainMix.setCurrentAndTargetValue(p.grains.mix);
         primed = true;
     }
     start.setTargetValue(p.start);
@@ -24,6 +26,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
     gain.setTargetValue(targetGain);
     pan.setTargetValue(p.pan);
     pitchRatio.setTargetValue(std::exp2(p.pitch / 12.0f));
+    grainMix.setTargetValue(p.grains.mix);
 
     const int n = sample.audio.getNumSamples();
     const float* srcL = sample.audio.getReadPointer(0);
@@ -93,7 +96,8 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
         const double pos = mapPos(phase);
 
         float l = 0.0f, r = 0.0f;
-        float g = gain.getNextValue() * chaos.gain * static_cast<float>(std::min(1.0, chaos.edgeBeats / fadeBeats));
+        const float level = gain.getNextValue();
+        float g = level * chaos.gain * static_cast<float>(std::min(1.0, chaos.edgeBeats / fadeBeats));
         if (!p.warp) {
             l = read(srcL, pos);
             r = read(srcR, pos);
@@ -135,9 +139,17 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
                 r += amp * read(srcR, regionStart + rel);
             }
         }
+        l *= g;
+        r *= g;
+        // Grain cloud: crossfade from the loop to the cloud. Chaos dips/dropouts only touch the loop.
+        if (const float m = grainMix.getNextValue(); m > 0.0f) {
+            const auto [wl, wr] = cloud.next(sample, p.grains, beats / beatsPerSample, pos, pitchRatio.getCurrentValue());
+            l = l * (1.0f - m) + wl * level * m;
+            r = r * (1.0f - m) + wr * level * m;
+        }
         const float b = pan.getNextValue();
-        outL[i] += l * g * std::min(1.0f, 1.0f - b);
-        outR[i] += r * g * std::min(1.0f, 1.0f + b);
+        outL[i] += l * std::min(1.0f, 1.0f - b);
+        outR[i] += r * std::min(1.0f, 1.0f + b);
         lastPos = static_cast<float>(pos / std::max(1, n - 1));
     }
 }

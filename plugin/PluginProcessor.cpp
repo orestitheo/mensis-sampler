@@ -40,6 +40,30 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"chaos.grid", 1}, "Chaos Grid", kGridNames, 1),
                std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"chaos.feel", 1}, "Chaos Feel", kFeelNames, 0),
                std::make_unique<juce::AudioParameterInt>(juce::ParameterID{"seed", 1}, "Seed", 0, 9999, 1));
+
+    // Grain clouds: one group of 8 per track, after the globals, so each is one Push bank.
+    auto shown = [](auto fn) { return juce::AudioParameterFloatAttributes().withStringFromValueFunction(fn); };
+    auto percent = shown([](float v, int) { return juce::String(juce::roundToInt(v * 100.0f)) + "%"; });
+    for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) {
+        auto id = [t](const char* name) { return juce::ParameterID{paramId(t, name), 1}; };
+        auto label = [t](const char* name) { return "T" + juce::String(t + 1) + " Grain " + name; };
+        auto range = [](float lo, float hi, float centre) {
+            juce::NormalisableRange<float> r(lo, hi);
+            r.setSkewForCentre(centre); // more knob travel for the small values
+            return r;
+        };
+        layout.add(std::make_unique<juce::AudioParameterFloat>(id("grain.mix"), label("Mix"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, percent),
+                   std::make_unique<juce::AudioParameterFloat>(id("grain.size"), label("Size"), range(10.0f, 500.0f, 80.0f), 80.0f,
+                       shown([](float v, int) { return juce::String(juce::roundToInt(v)) + " ms"; })),
+                   std::make_unique<juce::AudioParameterFloat>(id("grain.density"), label("Density"), range(1.0f, 100.0f, 20.0f), 20.0f,
+                       shown([](float v, int) { return juce::String(v, v < 10.0f ? 1 : 0) + " /s"; })),
+                   std::make_unique<juce::AudioParameterFloat>(id("grain.spray"), label("Spray"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.2f, percent),
+                   std::make_unique<juce::AudioParameterFloat>(id("grain.detune"), label("Detune"), juce::NormalisableRange<float>(0.0f, 12.0f), 0.0f,
+                       shown([](float v, int) { return juce::String(v, 1) + " st"; })),
+                   std::make_unique<juce::AudioParameterFloat>(id("grain.reverse"), label("Reverse"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, percent),
+                   std::make_unique<juce::AudioParameterFloat>(id("grain.width"), label("Width"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.5f, percent),
+                   std::make_unique<juce::AudioParameterBool>(id("grain.freeze"), label("Freeze"), false));
+    }
     return layout;
 }
 
@@ -50,8 +74,11 @@ MensisProcessor::MensisProcessor()
       params(*this, nullptr, "MensisSampler", makeLayout()) {
     for (size_t t = 0; t < kNumTracks; ++t) {
         auto raw = [&](const char* name) { return params.getRawParameterValue(paramId(t, name)); };
-        trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan"), raw("warp"), raw("chaos"), raw("pitch"), raw("slice")};
+        trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan"), raw("warp"), raw("chaos"), raw("pitch"), raw("slice"),
+                          raw("grain.mix"), raw("grain.size"), raw("grain.density"), raw("grain.spray"),
+                          raw("grain.detune"), raw("grain.reverse"), raw("grain.width"), raw("grain.freeze")};
         playPos[t].store(-1.0f);
+        grainAnchor[t].store(-1.0f);
     }
     chaosAmount = params.getRawParameterValue("chaos");
     chaosGrid = params.getRawParameterValue("chaos.grid");
@@ -79,7 +106,10 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     lastBpm.store(bpm);
 
     if (!playing)
-        for (auto& p : playPos) p.store(-1.0f, std::memory_order_relaxed);
+        for (size_t t = 0; t < kNumTracks; ++t) {
+            playPos[t].store(-1.0f, std::memory_order_relaxed);
+            publishGrains(t, nullptr, false);
+        }
     // Re-roll: a new seed takes over at the next bar line. Steps before it keep the old seed, so an event
     // already playing finishes cleanly.
     const auto wantSeed = static_cast<uint32_t>(seedParam->load());
@@ -102,7 +132,7 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         for (size_t t = 0; t < kNumTracks; ++t) {
             const auto* sample = liveSamples[t].load(std::memory_order_acquire);
             playPos[t].store(-1.0f, std::memory_order_relaxed);
-            if (sample == nullptr) continue;
+            if (sample == nullptr) { publishGrains(t, nullptr, false); continue; }
             const auto& tp = trackParams[t];
             mensis::LoopParams lp{tp.start->load(), tp.length->load(),
                                   kBarValues[static_cast<size_t>(tp.bars->load())], tp.reverse->load() > 0.5f,
@@ -112,14 +142,32 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             lp.chaos.stream = static_cast<uint32_t>(t);
             lp.pitch = tp.pitch->load();
             lp.slice = tp.slice->load() > 0.5f;
+            lp.grains = {tp.grainMix->load(), tp.grainSize->load(), tp.grainDensity->load(), tp.grainSpray->load(),
+                         tp.grainDetune->load(), tp.grainReverse->load(), tp.grainWidth->load(),
+                         tp.grainFreeze->load() > 0.5f, lp.chaos.amount, seedNew, static_cast<uint32_t>(t)};
             tracks[t].render(*sample, lp, ppq, bpm, buffer, 0, numSamples);
             playPos[t].store(tracks[t].position(), std::memory_order_relaxed);
+            publishGrains(t, sample, lp.grains.mix > 0.0f);
         }
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch) // safety net: never send more than 0 dBFS to Live
             juce::FloatVectorOperations::clip(buffer.getWritePointer(ch), buffer.getReadPointer(ch), -1.0f, 1.0f, numSamples);
     }
     internalPpq = ppq + numSamples * bpm / (60.0 * getSampleRate());
     blocksDone.fetch_add(1, std::memory_order_release);
+}
+
+// Copies the grain cloud's state into atomics the UI reads (audio thread; no locks, no allocation).
+void MensisProcessor::publishGrains(size_t track, const mensis::Sample* sample, bool on) {
+    const auto& cloud = tracks[track].grains();
+    const int n = sample != nullptr ? sample->audio.getNumSamples() : 1;
+    for (size_t i = 0; i < kMaxGrains; ++i) {
+        const auto v = on ? cloud.view(i, n) : mensis::GrainCloud::View{};
+        auto& d = grainDots[track][i];
+        d.x.store(v.x, std::memory_order_relaxed);
+        d.env.store(v.backwards ? -v.env : v.env, std::memory_order_relaxed);
+        d.pan.store(v.pan, std::memory_order_relaxed);
+    }
+    grainAnchor[track].store(on ? cloud.anchor(n) : -1.0f, std::memory_order_relaxed);
 }
 
 bool MensisProcessor::loadSample(size_t track, const juce::File& file, bool fresh) {

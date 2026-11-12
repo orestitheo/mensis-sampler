@@ -120,6 +120,7 @@ public:
             // small tab at the top, pointing into the region, so the edges look grabbable
             g.fillRect(edge == Grab::Start ? x : x - 6.0f, 0.0f, 8.0f, 10.0f);
         }
+        drawCloud(g, b, *sample);
         if (const float pos = proc.getPlayPosition(track); pos >= 0.0f) {
             g.setColour(MensisLook::fg);
             g.fillRect(pos * w - 0.5f, 0.0f, 1.0f, b.getHeight());
@@ -186,6 +187,45 @@ private:
         const float st = value("start");
         return {st, st + value("length") * (1.0f - st)};
     }
+    // The grain cloud: one dot per grain at the spot it reads, higher = panned left, lower = right.
+    // Dots swell and fade with the grain's window and leave a short trail; backwards grains are rings.
+    // Under it: the spray range as a thin bar, and when frozen a dotted line with a diamond on top.
+    void drawCloud(juce::Graphics& g, juce::Rectangle<float> b, const mensis::Sample& sample) const {
+        const float anchor = proc.getGrainAnchor(track);
+        if (anchor < 0.0f) return; // cloud off
+        const float w = b.getWidth(), h = b.getHeight(), mid = b.getCentreY();
+
+        const float ax = anchor * w;
+        const float spray = value("grain.spray") * 0.5f * static_cast<float>(sample.sampleRate)
+                            / static_cast<float>(std::max(1, sample.audio.getNumSamples())) * w;
+        g.setColour(MensisLook::fg.withAlpha(0.25f));
+        g.fillRect(juce::Rectangle<float>(ax - spray, h - 3.0f, 2.0f * spray, 1.0f).getIntersection(b));
+        g.setColour(MensisLook::fg.withAlpha(0.6f));
+        g.fillRect(ax - 0.5f, h - 5.0f, 1.0f, 5.0f); // where the cloud is centred
+
+        if (value("grain.freeze") > 0.5f) {
+            g.setColour(MensisLook::fg);
+            for (float y = 10.0f; y < h - 6.0f; y += 5.0f) g.fillRect(ax - 0.5f, y, 1.0f, 2.0f);
+            juce::Path diamond;
+            diamond.addQuadrilateral(ax, 1.0f, ax + 4.0f, 5.0f, ax, 9.0f, ax - 4.0f, 5.0f);
+            g.fillPath(diamond);
+        }
+
+        for (size_t i = 0; i < MensisProcessor::kMaxGrains; ++i) {
+            const auto d = proc.getGrainDot(track, i);
+            if (d.env <= 0.01f) continue;
+            const float x = d.x * w, y = mid - d.pan * (h * 0.5f - 8.0f);
+            const float r = 1.5f + 2.5f * d.env;
+            const float trail = 10.0f * d.env * (d.backwards ? 1.0f : -1.0f); // behind the dot
+            g.setGradientFill(juce::ColourGradient(MensisLook::fg.withAlpha(0.5f * d.env), x, y,
+                                                   MensisLook::fg.withAlpha(0.0f), x + trail, y, false));
+            g.fillRect(juce::Rectangle<float>(std::min(x, x + trail), y - 0.5f, std::abs(trail), 1.0f));
+            g.setColour(MensisLook::fg.withAlpha(0.3f + 0.7f * d.env));
+            if (d.backwards) g.drawEllipse(x - r, y - r, 2.0f * r, 2.0f * r, 1.0f);
+            else g.fillEllipse(x - r, y - r, 2.0f * r, 2.0f * r);
+        }
+    }
+
     enum class Grab { None, Start, End, New };
 
     Grab grabAt(float px) const {
@@ -275,13 +315,25 @@ public:
         }
         const std::array<std::pair<const char*, const char*>, 3> toggleIds{
             {{"reverse", "REV"}, {"warp", "WARP"}, {"slice", "SLICE"}}};
-        for (size_t i = 0; i < toggles.size(); ++i) {
-            toggles[i].button.setButtonText(toggleIds[i].second);
-            toggles[i].button.setClickingTogglesState(true);
-            toggles[i].attachment = std::make_unique<juce::ButtonParameterAttachment>(
-                *p.params.getParameter(id(toggleIds[i].first)), toggles[i].button);
-            addAndMakeVisible(toggles[i].button);
+        for (size_t i = 0; i < toggles.size(); ++i) attachToggle(toggles[i], toggleIds[i].first, toggleIds[i].second);
+
+        const std::array<std::pair<const char*, const char*>, 7> grainIds{{{"grain.mix", "MIX"}, {"grain.size", "SIZE"},
+            {"grain.density", "DENSITY"}, {"grain.spray", "SPRAY"}, {"grain.detune", "DETUNE"},
+            {"grain.reverse", "REVERSE"}, {"grain.width", "WIDTH"}}};
+        for (size_t i = 0; i < grainKnobs.size(); ++i) {
+            grainKnobs[i].attach(*p.params.getParameter(id(grainIds[i].first)), grainIds[i].second);
+            addChildComponent(grainKnobs[i]);
         }
+        attachToggle(freeze, "grain.freeze", "FREEZE");
+        freeze.button.setVisible(false);
+    }
+
+    // 0 = LOOP knobs, 1 = GRAINS knobs. The waveform and track header stay.
+    void setPage(int page) {
+        for (auto& k : knobs) k.setVisible(page == 0);
+        for (auto& t : toggles) t.button.setVisible(page == 0);
+        for (auto& k : grainKnobs) k.setVisible(page == 1);
+        freeze.button.setVisible(page == 1);
     }
 
     void refresh() {
@@ -306,8 +358,13 @@ public:
 
         auto right = area.removeFromRight(9 * 60);
         wave.setBounds(area.withTrimmedRight(16));
-        for (auto& k : knobs) k.setBounds(right.removeFromLeft(60));
+        for (size_t i = 0; i < knobs.size(); ++i) {
+            const auto col = right.removeFromLeft(60);
+            knobs[i].setBounds(col);
+            grainKnobs[i].setBounds(col); // same columns, other page
+        }
         right = right.withSizeKeepingCentre(right.getWidth() - 8, 74);
+        freeze.button.setBounds(right.withHeight(22).reduced(4, 0));
         for (auto& t : toggles) {
             t.button.setBounds(right.removeFromTop(22).reduced(4, 0));
             right.removeFromTop(4);
@@ -318,6 +375,12 @@ private:
     juce::String id(const char* name) const { return "t" + juce::String(track + 1) + "." + name; }
 
     struct Toggle { juce::TextButton button; std::unique_ptr<juce::ButtonParameterAttachment> attachment; };
+    void attachToggle(Toggle& t, const char* paramName, const char* text) {
+        t.button.setButtonText(text);
+        t.button.setClickingTogglesState(true);
+        t.attachment = std::make_unique<juce::ButtonParameterAttachment>(*proc.params.getParameter(id(paramName)), t.button);
+        addAndMakeVisible(t.button);
+    }
     MensisProcessor& proc;
     size_t track;
     juce::Label number, name;
@@ -325,6 +388,8 @@ private:
     WaveformView wave;
     std::array<Knob, 7> knobs;
     std::array<Toggle, 3> toggles;
+    std::array<Knob, 7> grainKnobs;
+    Toggle freeze;
 };
 
 class MensisEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget,
@@ -353,6 +418,17 @@ public:
             seed->endChangeGesture();
         };
         addAndMakeVisible(reroll);
+
+        const std::array<const char*, 2> pageNames{"LOOP", "GRAINS"};
+        for (int i = 0; i < 2; ++i) {
+            auto& b = pages[static_cast<size_t>(i)];
+            b.setButtonText(pageNames[static_cast<size_t>(i)]);
+            b.setRadioGroupId(1);
+            b.setClickingTogglesState(true);
+            b.onClick = [this, i] { for (auto& s : strips) s->setPage(i); };
+            addAndMakeVisible(b);
+        }
+        pages[0].setToggleState(true, juce::dontSendNotification);
         sendLookAndFeelChange(); // the strips were built before they had a parent; restyle their knob value boxes
         setSize(1040, 640);
         timerCallback();
@@ -377,6 +453,8 @@ public:
         reroll.setBounds(head.removeFromRight(80).withSizeKeepingCentre(80, 24));
         head.removeFromRight(8);
         for (size_t i = globalKnobs.size(); i-- > 0;) globalKnobs[i].setBounds(head.removeFromRight(i == 0 ? 76 : 60));
+        auto tabs = head.withTrimmedLeft(180).removeFromLeft(2 * 84).withSizeKeepingCentre(2 * 84, 24);
+        for (auto& b : pages) b.setBounds(tabs.removeFromLeft(84).withTrimmedRight(4));
 
         auto area = getLocalBounds().reduced(20, 0).withTrimmedTop(kHeader).withTrimmedBottom(12);
         const int h = area.getHeight() / static_cast<int>(MensisProcessor::kNumTracks);
@@ -433,5 +511,6 @@ private:
     std::array<std::unique_ptr<TrackStrip>, MensisProcessor::kNumTracks> strips;
     std::array<Knob, 4> globalKnobs;
     juce::TextButton reroll;
+    std::array<juce::TextButton, 2> pages; // LOOP / GRAINS
     std::unique_ptr<juce::FileChooser> chooser;
 };

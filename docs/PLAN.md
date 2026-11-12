@@ -60,3 +60,19 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
     Pitch still works. Reverse falls back to grain warp.
   - Fades around Chaos jumps are 1 ms instead of 5 ms so hits keep their attack.
 - Waveform shows the slice markers when SLICE is on.
+
+## Section 4 notes: Grain clouds
+- Per track, after the looper: a cloud of short grains read straight from the sample, mixed with the loop.
+- Where: around the spot the loop is playing (SPRAY widens it, up to +-0.5 s). FREEZE holds the spot
+  while the loop moves on.
+- Knobs: MIX (dry loop <-> cloud), SIZE (10-500 ms), DENSITY (1-100 grains/s), SPRAY, DETUNE (random
+  pitch per grain, up to +-12 st, on top of the track's Pitch), REVERSE (chance a grain plays backwards),
+  WIDTH (random pan per grain) + FREEZE. Params `t1.grain.mix` ... (…t4), added after the global
+  Chaos params so each track's grains are one Push bank of 8.
+- Timing: grain k starts at (k + random 0..1) / density seconds of host time; its random choices are a
+  hash of (seed, track, k). Same seed + same song position = same cloud.
+- Chaos stirs it a bit: more spray, and sometimes a burst of 3 grains at once.
+- Fixed pool of 64 grains per track (steal the most finished one). Sine-squared window, level scaled
+  by 1/sqrt(overlap) so dense clouds don't get louder.
+- MIX 0 = grains off, no CPU.
+- UI: LOOP / GRAINS page buttons switch what the 4 track strips show.

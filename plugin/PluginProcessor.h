@@ -20,6 +20,16 @@ public:
     // 0..1 where the track is playing in its sample, -1 when stopped or empty. Any thread.
     float getPlayPosition(size_t track) const { return playPos[track].load(std::memory_order_relaxed); }
 
+    // Grain cloud for drawing, any thread. env 0 = grain not playing; anchor -1 = cloud off.
+    struct GrainDot { float x, env, pan; bool backwards; };
+    GrainDot getGrainDot(size_t track, size_t i) const {
+        const auto& d = grainDots[track][i];
+        const float env = d.env.load(std::memory_order_relaxed);
+        return {d.x.load(std::memory_order_relaxed), std::abs(env), d.pan.load(std::memory_order_relaxed), env < 0.0f};
+    }
+    float getGrainAnchor(size_t track) const { return grainAnchor[track].load(std::memory_order_relaxed); }
+    static constexpr size_t kMaxGrains = mensis::GrainCloud::kMaxGrains;
+
     juce::AudioProcessorValueTreeState params;
 
     const juce::String getName() const override { return JucePlugin_Name; }
@@ -58,6 +68,14 @@ private:
         std::atomic<float>* chaos;
         std::atomic<float>* pitch;
         std::atomic<float>* slice;
+        std::atomic<float>* grainMix;
+        std::atomic<float>* grainSize;
+        std::atomic<float>* grainDensity;
+        std::atomic<float>* grainSpray;
+        std::atomic<float>* grainDetune;
+        std::atomic<float>* grainReverse;
+        std::atomic<float>* grainWidth;
+        std::atomic<float>* grainFreeze;
     };
     std::array<TrackParams, kNumTracks> trackParams{};
     std::array<mensis::LoopTrack, kNumTracks> tracks;
@@ -71,6 +89,10 @@ private:
     std::atomic<uint64_t> blocksDone{0};
 
     std::array<std::atomic<float>, kNumTracks> playPos{};
+    struct AtomicDot { std::atomic<float> x{0.0f}, env{0.0f}, pan{0.0f}; }; // env < 0 = plays backwards
+    std::array<std::array<AtomicDot, mensis::GrainCloud::kMaxGrains>, kNumTracks> grainDots;
+    std::array<std::atomic<float>, kNumTracks> grainAnchor{};
+    void publishGrains(size_t track, const mensis::Sample* sample, bool on);
     std::atomic<float>* chaosAmount = nullptr;
     std::atomic<float>* chaosGrid = nullptr;
     std::atomic<float>* chaosFeel = nullptr;
