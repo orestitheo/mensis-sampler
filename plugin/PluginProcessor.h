@@ -4,6 +4,7 @@
 #include <atomic>
 #include <vector>
 #include "core/engine/LoopTrack.h"
+#include "core/engine/Space.h"
 
 // Thin host wrapper: reads host tempo/position and params, hands them to core/.
 class MensisProcessor final : public juce::AudioProcessor {
@@ -118,6 +119,17 @@ private:
     std::atomic<float>* chaosFeel = nullptr;
     std::atomic<float>* seedParam = nullptr;
     std::atomic<float>* masterDb = nullptr;
+    std::array<std::atomic<float>*, kNumTracks> sendParams{};
+    std::atomic<float>* spaceTime = nullptr;
+    std::atomic<float>* spaceFeedback = nullptr;
+    std::atomic<float>* spaceBlend = nullptr;
+    std::atomic<float>* spaceSize = nullptr;
+    std::atomic<float>* spaceTone = nullptr;
+    std::atomic<float>* spaceReturn = nullptr;
+    std::atomic<float>* spaceFreeze = nullptr;
+    mensis::Space space;
+    juce::AudioBuffer<float> trackBuf, sendBuf; // scratch, sized in prepareToPlay
+    std::array<juce::SmoothedValue<float>, kNumTracks> sendGain;
     juce::SmoothedValue<float> masterGain{1.0f};
     uint32_t seedOld = 0, seedNew = 0; // audio thread only
     double seedSwitch = -1e300;

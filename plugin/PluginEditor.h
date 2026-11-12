@@ -480,6 +480,7 @@ private:
 // One track: number, Load button, file name; waveform on the left, knobs and switches on the right.
 class TrackStrip final : public juce::Component {
 public:
+    static constexpr int kKnobAreaWidth = 9 * 60; // knob columns + toggle column, right of the waveform
     std::function<void()> onLoad;
 
     TrackStrip(MensisProcessor& p, size_t t) : proc(p), track(t), wave(p, t) {
@@ -572,7 +573,7 @@ public:
         name.setBounds(head.withTrimmedLeft(8));
         area.removeFromTop(6);
 
-        auto right = area.removeFromRight(9 * 60);
+        auto right = area.removeFromRight(kKnobAreaWidth);
         wave.setBounds(area.withTrimmedRight(16));
         right = right.withSizeKeepingCentre(right.getWidth(), std::min(right.getHeight(), 96)); // knobs stay knob-sized
         for (size_t i = 0; i < knobs.size(); ++i) {
@@ -617,6 +618,65 @@ private:
     std::unique_ptr<juce::ButtonParameterAttachment> playAttachment;
 };
 
+// SPACE page: one SEND per track (lined up with its strip) and the shared delay + reverb controls.
+class SpacePanel final : public juce::Component {
+public:
+    explicit SpacePanel(MensisProcessor& p) {
+        for (size_t t = 0; t < sends.size(); ++t) {
+            sends[t].attach(*p.params.getParameter("t" + juce::String(t + 1) + ".send"), "SEND");
+            addAndMakeVisible(sends[t]);
+        }
+        const std::array<std::pair<const char*, const char*>, 6> ids{{{"space.time", "TIME"}, {"space.feedback", "FEEDBACK"},
+            {"space.blend", "BLEND"}, {"space.size", "SIZE"}, {"space.tone", "TONE"}, {"space.return", "RETURN"}}};
+        for (size_t i = 0; i < knobs.size(); ++i) {
+            knobs[i].attach(*p.params.getParameter(ids[i].first), ids[i].second);
+            addAndMakeVisible(knobs[i]);
+        }
+        freeze.setButtonText("FREEZE");
+        freeze.setClickingTogglesState(true);
+        freezeAttachment = std::make_unique<juce::ButtonParameterAttachment>(*p.params.getParameter("space.freeze"), freeze);
+        addAndMakeVisible(freeze);
+    }
+
+    // Where each track strip sits, in this panel's coordinates, so its SEND lines up with it.
+    void setRows(const std::array<juce::Rectangle<int>, MensisProcessor::kNumTracks>& r) { rows = r; resized(); }
+
+    void paint(juce::Graphics& g) override {
+        g.setColour(MensisLook::dim);
+        g.fillRect(static_cast<float>(kSendWidth) + 10.0f, 16.0f, 1.0f, static_cast<float>(getHeight()) - 32.0f);
+        auto title = controlsArea().translated(0, -44).withHeight(36);
+        g.setColour(MensisLook::fg);
+        g.setFont(MensisLook::font(13.0f, true));
+        g.drawText("S P A C E", title, juce::Justification::bottomLeft);
+        g.setColour(MensisLook::mid);
+        g.setFont(MensisLook::font(10.0f));
+        g.drawText("SHARED DELAY + REVERB", title, juce::Justification::bottomRight);
+    }
+
+    void resized() override {
+        for (size_t t = 0; t < sends.size(); ++t)
+            sends[t].setBounds(rows[t].withX(0).withWidth(kSendWidth).withSizeKeepingCentre(kSendWidth, std::min(rows[t].getHeight(), 96)));
+        auto area = controlsArea();
+        auto top = area.removeFromTop(kRowH), bottom = area.removeFromTop(kRowH);
+        const int w = top.getWidth() / 4;
+        for (size_t i = 0; i < 3; ++i) knobs[i].setBounds(top.removeFromLeft(w).withSizeKeepingCentre(64, 96));
+        for (size_t i = 3; i < 6; ++i) knobs[i].setBounds(bottom.removeFromLeft(w).withSizeKeepingCentre(64, 96));
+        freeze.setBounds(bottom.removeFromLeft(w).withSizeKeepingCentre(80, 24));
+    }
+
+private:
+    static constexpr int kSendWidth = 64, kRowH = 110;
+    juce::Rectangle<int> controlsArea() const { // two rows of knobs, centred right of the sends
+        const auto r = getLocalBounds().withTrimmedLeft(kSendWidth + 24);
+        return r.withSizeKeepingCentre(r.getWidth(), 2 * kRowH).translated(0, 20);
+    }
+    std::array<Knob, MensisProcessor::kNumTracks> sends;
+    std::array<Knob, 6> knobs;
+    juce::TextButton freeze;
+    std::unique_ptr<juce::ButtonParameterAttachment> freezeAttachment;
+    std::array<juce::Rectangle<int>, MensisProcessor::kNumTracks> rows{};
+};
+
 class MensisEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget,
                            public juce::TextDragAndDropTarget, private juce::Timer {
 public:
@@ -646,16 +706,20 @@ public:
         };
         addAndMakeVisible(reroll);
 
-        const std::array<const char*, 4> pageNames{"LOOP", "GRAINS", "RESONATOR", "COLOR"};
-        for (int i = 0; i < 4; ++i) {
+        const std::array<const char*, 5> pageNames{"LOOP", "GRAINS", "RESONATOR", "COLOR", "SPACE"};
+        for (int i = 0; i < 5; ++i) {
             auto& b = pages[static_cast<size_t>(i)];
             b.setButtonText(pageNames[static_cast<size_t>(i)]);
             b.setRadioGroupId(1);
             b.setClickingTogglesState(true);
-            b.onClick = [this, i] { for (auto& s : strips) s->setPage(i); };
+            b.onClick = [this, i] {
+                for (auto& s : strips) s->setPage(i);
+                spacePanel.setVisible(i == 4);
+            };
             addAndMakeVisible(b);
         }
         pages[0].setToggleState(true, juce::dontSendNotification);
+        addChildComponent(spacePanel); // shown on the SPACE page
         sendLookAndFeelChange(); // the strips were built before they had a parent; restyle their knob value boxes
         setSize(1040, 840); // tall strips: room for a big waveform
         timerCallback();
@@ -682,12 +746,19 @@ public:
         reroll.setBounds(head.removeFromRight(80).withSizeKeepingCentre(80, 24));
         head.removeFromRight(8);
         for (size_t i = globalKnobs.size(); i-- > 0;) globalKnobs[i].setBounds(head.removeFromRight(i == 0 ? 76 : 60));
-        auto tabs = head.withTrimmedLeft(170).removeFromLeft(4 * 92).withSizeKeepingCentre(4 * 92, 24);
-        for (auto& b : pages) b.setBounds(tabs.removeFromLeft(92).withTrimmedRight(4));
+        auto tabs = head.withTrimmedLeft(160).removeFromLeft(5 * 80).withSizeKeepingCentre(5 * 80, 24);
+        for (auto& b : pages) b.setBounds(tabs.removeFromLeft(80).withTrimmedRight(4));
 
         auto area = getLocalBounds().reduced(20, 0).withTrimmedTop(kHeader).withTrimmedBottom(12);
         const int h = area.getHeight() / static_cast<int>(MensisProcessor::kNumTracks);
+        const auto stripsArea = area;
         for (auto& s : strips) s->setBounds(area.removeFromTop(h));
+        // SPACE page panel sits over the strips' knob area (the strips hide their knobs on that page).
+        spacePanel.setBounds(stripsArea.withTrimmedLeft(stripsArea.getWidth() - TrackStrip::kKnobAreaWidth));
+        std::array<juce::Rectangle<int>, MensisProcessor::kNumTracks> rows;
+        for (size_t t = 0; t < rows.size(); ++t)
+            rows[t] = strips[t]->getBounds().withTrimmedTop(40).translated(-spacePanel.getX(), -spacePanel.getY());
+        spacePanel.setRows(rows);
     }
 
     bool isInterestedInFileDrag(const juce::StringArray&) override { return true; }
@@ -741,6 +812,7 @@ private:
     std::array<Knob, 4> globalKnobs;
     Knob volume;
     juce::TextButton reroll;
-    std::array<juce::TextButton, 4> pages; // LOOP / GRAINS / RESONATOR / COLOR
+    std::array<juce::TextButton, 5> pages; // LOOP / GRAINS / RESONATOR / COLOR / SPACE
+    SpacePanel spacePanel{proc};
     std::unique_ptr<juce::FileChooser> chooser;
 };

@@ -4,6 +4,7 @@
 #include <map>
 #include "core/RenderStats.h"
 #include "core/engine/LoopTrack.h"
+#include "core/engine/Space.h"
 
 static int usage() {
     std::cerr << "usage: mensis-cli loop <sample> --out file.wav [--bpm 120] [--bars 1] [--seconds 8]\n"
@@ -15,7 +16,9 @@ static int usage() {
                  "                  [--res-mix 0] [--res-root 48] [--res-chord 0] [--res-decay 1] [--res-color 0]\n"
                  "                  [--cutoff 20000] [--reso 0] [--morph 0]\n"
                  "                  [--drive 0] [--char 0] [--bits 16] [--crush-rate 48000] [--squash 0] [--tilt 0]\n"
-                 "                  [--color-out 0] [--color-mix 1]\n";
+                 "                  [--color-out 0] [--color-mix 1]\n"
+                 "                  [--send 0] [--space-time 0.75] [--space-feedback 0.4] [--space-blend 0.5]\n"
+                 "                  [--space-size 0.5] [--space-tone 0.5]   (space: the track sent into the shared Space)\n";
     return 1;
 }
 
@@ -50,7 +53,9 @@ int main(int argc, char* argv[]) {
         {"--res-mix", "0"}, {"--res-root", "48"}, {"--res-chord", "0"}, {"--res-decay", "1"}, {"--res-color", "0"},
         {"--cutoff", "20000"}, {"--reso", "0"}, {"--morph", "0"},
         {"--drive", "0"}, {"--char", "0"}, {"--bits", "16"}, {"--crush-rate", "48000"}, {"--squash", "0"}, {"--tilt", "0"},
-        {"--color-out", "0"}, {"--color-mix", "1"}, {"--rate", "48000"}, {"--out", ""}};
+        {"--color-out", "0"}, {"--color-mix", "1"},
+        {"--send", "0"}, {"--space-time", "0.75"}, {"--space-feedback", "0.4"}, {"--space-blend", "0.5"},
+        {"--space-size", "0.5"}, {"--space-tone", "0.5"}, {"--rate", "48000"}, {"--out", ""}};
     for (int i = 3; i + 1 < argc; i += 2) {
         if (!opt.contains(argv[i])) return usage();
         opt[argv[i]] = argv[i + 1];
@@ -94,6 +99,18 @@ int main(int argc, char* argv[]) {
     constexpr int kBlock = 512; // render in blocks, like a host does
     for (int pos = 0; pos < out.getNumSamples(); pos += kBlock)
         track.render(*sample, params, pos * bpm / (60.0 * rate), bpm, out, pos, std::min(kBlock, out.getNumSamples() - pos));
+
+    if (const auto send = static_cast<float>(num("--send")); send > 0.0f) { // the track into the shared Space
+        mensis::Space space;
+        space.prepare(rate);
+        const mensis::SpaceParams sp{num("--space-time"), f("--space-feedback"), f("--space-blend"), f("--space-size"),
+                                     f("--space-tone"), 1.0f, false};
+        juce::AudioBuffer<float> wet(out);
+        wet.applyGain(send);
+        for (int pos = 0; pos < wet.getNumSamples(); pos += kBlock)
+            space.process(wet.getWritePointer(0, pos), wet.getWritePointer(1, pos), std::min(kBlock, wet.getNumSamples() - pos), sp, bpm);
+        for (int ch = 0; ch < 2; ++ch) out.addFrom(ch, 0, wet, ch, 0, out.getNumSamples());
+    }
 
     if (!writeWav(out, rate, cwd.getChildFile(opt["--out"]))) { std::cerr << "failed writing " << opt["--out"] << "\n"; return 1; }
 

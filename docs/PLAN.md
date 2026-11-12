@@ -108,3 +108,20 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
 - All neutral = bypassed, bit-identical. Drive/tilt/mix/output are smoothed.
 - Params per track: `t1.col.drive`, `col.char`, `col.bits`, `col.rate`, `col.squash`, `col.tilt`, `col.out`,
   `col.mix` (one Push bank of 8). UI: COLOR page.
+
+## Section 7 notes: Space (shared)
+- One Space for the whole instrument. Each track has a SEND (`t1.send` ..t4, post level/pan) into it;
+  the Space output is added to the mix before master VOLUME.
+- Delay: stereo ping-pong (feedback crosses L<->R), time synced to tempo: 1/32 .. 1 bar incl. dotted
+  and triplet. FEEDBACK 0..95% with a tone filter and soft saturation in the loop. Time changes glide
+  (tape-like) instead of clicking. Up to 6 s.
+- Reverb: 8-line feedback delay network (Hadamard mix), 4 input diffusers per side, slowly modulated
+  line lengths (smooth, no metallic ring), damping in the loop. SIZE sets room size and decay
+  (~0.5 s .. 20 s), TONE sets damping (dark .. bright). The delay echoes also feed the reverb.
+- BLEND: delay only <-> reverb only. RETURN: Space output level.
+- FREEZE: input to Space muted, delay feedback 100% and reverb lossless: whatever is in there hangs
+  forever. Off: decays normally.
+- Globals: `space.time`, `space.feedback`, `space.blend`, `space.size`, `space.tone`, `space.return`,
+  `space.freeze`. UI: SPACE page with the 4 SENDs and the Space knobs.
+- Tracks render into a preallocated scratch buffer so their send can be taken; blocks bigger than
+  prepared are processed in chunks.
