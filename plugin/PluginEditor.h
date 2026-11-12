@@ -94,16 +94,21 @@ public:
 
         const auto [st, en] = region();
         const float w = b.getWidth(), mid = b.getCentreY(), half = b.getHeight() * 0.5f - 2.0f;
-        g.setColour(MensisLook::fg.withAlpha(0.08f));
+        const bool moving = grab == Grab::Move || (grab == Grab::None && hover == Grab::Move);
+        g.setColour(MensisLook::fg.withAlpha(moving ? 0.16f : 0.08f));
         g.fillRect(b.withX(st * w).withRight(en * w));
         for (size_t x = 0; x < peaks.size(); ++x) {
             const float fx = static_cast<float>(x) / w;
             g.setColour(fx >= st && fx <= en ? MensisLook::fg : MensisLook::dim); // only the loop region is lit
             g.drawVerticalLine(static_cast<int>(x), mid - peaks[x] * half, mid + peaks[x] * half);
         }
-        g.setColour(MensisLook::fg);
-        g.fillRect(st * w, 0.0f, 2.0f, b.getHeight());
-        g.fillRect(en * w - 2.0f, 0.0f, 2.0f, b.getHeight());
+        for (const auto [edge, x] : {std::pair{Grab::Start, st * w}, std::pair{Grab::End, en * w - 2.0f}}) {
+            const bool active = grab == edge || (grab == Grab::None && hover == edge);
+            g.setColour(active ? MensisLook::fg : MensisLook::fg.withAlpha(0.7f));
+            g.fillRect(x, 0.0f, active ? 3.0f : 2.0f, b.getHeight());
+            // small tab at the top, pointing into the region, so the edges look grabbable
+            g.fillRect(edge == Grab::Start ? x : x - 6.0f, 0.0f, 8.0f, 10.0f);
+        }
         if (const float pos = proc.getPlayPosition(track); pos >= 0.0f) {
             g.setColour(MensisLook::fg);
             g.fillRect(pos * w - 0.5f, 0.0f, 1.0f, b.getHeight());
@@ -111,33 +116,59 @@ public:
         }
     }
 
+    // Drag inside the region: move it. Drag an edge: resize. Drag on empty waveform: draw a new region.
+    // Double-click: the whole sample.
+    void mouseMove(const juce::MouseEvent& e) override {
+        const Grab g = proc.getSample(track) == nullptr ? Grab::None : grabAt(e.position.x);
+        setMouseCursor(g == Grab::Start || g == Grab::End ? juce::MouseCursor::LeftRightResizeCursor
+                       : g == Grab::Move ? juce::MouseCursor::DraggingHandCursor
+                       : g == Grab::New ? juce::MouseCursor::IBeamCursor : juce::MouseCursor::NormalCursor);
+        if (g != hover) { hover = g; repaint(); }
+    }
+
+    void mouseExit(const juce::MouseEvent&) override { hover = Grab::None; repaint(); }
+
     void mouseDown(const juce::MouseEvent& e) override {
         if (proc.getSample(track) == nullptr) return;
-        const auto [st, en] = region();
-        const float x = xNorm(e);
-        draggingStart = std::abs(x - st) < std::abs(x - en);
+        grab = grabAt(e.position.x);
+        std::tie(downStart, downEnd) = region();
+        downX = xNorm(e);
         param("start")->beginChangeGesture();
         param("length")->beginChangeGesture();
-        dragging = true;
-        mouseDrag(e);
     }
 
     void mouseDrag(const juce::MouseEvent& e) override {
-        if (!dragging) return;
-        auto [st, en] = region();
-        const float x = xNorm(e);
-        if (draggingStart) st = std::min(x, en - 0.01f * (1.0f - x)); // keep End where it is
-        else en = std::max(x, st + 0.01f * (1.0f - st));
-        st = std::clamp(st, 0.0f, 0.99f);
-        set("start", st);
-        set("length", std::clamp((en - st) / (1.0f - st), 0.01f, 1.0f)); // Length = share of what's after Start
+        const float x = xNorm(e), len = downEnd - downStart;
+        switch (grab) {
+            case Grab::None: return;
+            case Grab::Start: apply(std::min(x, downEnd), downEnd); break;
+            case Grab::End: apply(downStart, std::max(x, downStart)); break;
+            case Grab::Move: { // same length, slides between the sample's ends
+                const float st = std::clamp(downStart + x - downX, 0.0f, 1.0f - len);
+                apply(st, st + len);
+                break;
+            }
+            case Grab::New:
+                if (e.getDistanceFromDragStartX() == 0) return; // a plain click doesn't wipe the region
+                apply(std::min(x, downX), std::max(x, downX));
+                break;
+        }
     }
 
     void mouseUp(const juce::MouseEvent&) override {
-        if (!dragging) return;
+        if (grab == Grab::None) return;
         param("start")->endChangeGesture();
         param("length")->endChangeGesture();
-        dragging = false;
+        grab = Grab::None;
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent&) override {
+        if (proc.getSample(track) == nullptr) return;
+        param("start")->beginChangeGesture();
+        param("length")->beginChangeGesture();
+        apply(0.0f, 1.0f);
+        param("start")->endChangeGesture();
+        param("length")->endChangeGesture();
     }
 
 private:
@@ -150,6 +181,23 @@ private:
         const float st = value("start");
         return {st, st + value("length") * (1.0f - st)};
     }
+    enum class Grab { None, Start, End, Move, New };
+
+    Grab grabAt(float px) const {
+        const auto [st, en] = region();
+        const float w = static_cast<float>(getWidth());
+        const float ds = std::abs(px - st * w), de = std::abs(px - en * w);
+        if (std::min(ds, de) <= 6.0f) return ds < de ? Grab::Start : Grab::End; // 6 px grab zone per edge
+        return px > st * w && px < en * w ? Grab::Move : Grab::New;
+    }
+
+    // Region as 0..1 of the sample -> Start and Length params (Length = share of what's after Start).
+    void apply(float st, float en) {
+        st = std::clamp(st, 0.0f, 0.99f);
+        set("start", st);
+        set("length", std::clamp((en - st) / (1.0f - st), 0.01f, 1.0f));
+    }
+
     float xNorm(const juce::MouseEvent& e) const {
         return std::clamp(e.position.x / static_cast<float>(std::max(1, getWidth())), 0.0f, 1.0f);
     }
@@ -169,7 +217,8 @@ private:
     size_t track;
     const mensis::Sample* peaksFor = nullptr;
     std::vector<float> peaks;
-    bool dragging = false, draggingStart = true;
+    Grab grab = Grab::None, hover = Grab::None;
+    float downStart = 0.0f, downEnd = 1.0f, downX = 0.0f;
 };
 
 // A Live-style knob: name above, value below. Drag up/down, double-click resets.
@@ -213,8 +262,8 @@ public:
         load.onClick = [this] { if (onLoad) onLoad(); };
         for (auto* c : std::initializer_list<juce::Component*>{&number, &name, &load, &wave}) addAndMakeVisible(c);
 
-        const std::array<std::pair<const char*, const char*>, 6> knobIds{{{"start", "START"}, {"length", "LENGTH"},
-            {"bars", "BARS"}, {"level", "LEVEL"}, {"pan", "PAN"}, {"chaos", "CHAOS"}}};
+        const std::array<std::pair<const char*, const char*>, 7> knobIds{{{"start", "START"}, {"length", "LENGTH"},
+            {"bars", "BARS"}, {"pitch", "PITCH"}, {"level", "LEVEL"}, {"pan", "PAN"}, {"chaos", "CHAOS"}}};
         for (size_t i = 0; i < knobs.size(); ++i) {
             knobs[i].attach(*p.params.getParameter(id(knobIds[i].first)), knobIds[i].second);
             addAndMakeVisible(knobs[i]);
@@ -232,6 +281,7 @@ public:
     void refresh() {
         const auto file = proc.getSampleFile(track);
         name.setText(file == juce::File{} ? "empty" : file.getFileNameWithoutExtension(), juce::dontSendNotification);
+        knobs[3].setEnabled(toggles[1].button.getToggleState()); // Pitch only works with Warp on
         wave.repaint();
     }
 
@@ -248,7 +298,7 @@ public:
         name.setBounds(head.withTrimmedLeft(8));
         area.removeFromTop(6);
 
-        auto right = area.removeFromRight(8 * 60);
+        auto right = area.removeFromRight(9 * 60);
         wave.setBounds(area.withTrimmedRight(16));
         for (auto& k : knobs) k.setBounds(right.removeFromLeft(60));
         right = right.withSizeKeepingCentre(right.getWidth() - 8, 48);
@@ -267,7 +317,7 @@ private:
     juce::Label number, name;
     juce::TextButton load;
     WaveformView wave;
-    std::array<Knob, 6> knobs;
+    std::array<Knob, 7> knobs;
     std::array<Toggle, 2> toggles;
 };
 
@@ -298,7 +348,7 @@ public:
         };
         addAndMakeVisible(reroll);
         sendLookAndFeelChange(); // the strips were built before they had a parent; restyle their knob value boxes
-        setSize(980, 640);
+        setSize(1040, 640);
         timerCallback();
         startTimerHz(30); // moves the playheads; also picks up samples restored from a saved Live set
     }

@@ -4,7 +4,7 @@ namespace mensis {
 
 void LoopTrack::prepare(double newSampleRate) {
     sampleRate = newSampleRate;
-    for (auto* v : {&start, &length, &gain, &pan}) v->reset(sampleRate, 0.05); // 50 ms glide, no zipper noise
+    for (auto* v : {&start, &length, &gain, &pan, &pitchRatio}) v->reset(sampleRate, 0.05); // 50 ms glide, no zipper noise
     primed = false;
 }
 
@@ -16,12 +16,14 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
         length.setCurrentAndTargetValue(p.length);
         gain.setCurrentAndTargetValue(targetGain);
         pan.setCurrentAndTargetValue(p.pan);
+        pitchRatio.setCurrentAndTargetValue(std::exp2(p.pitch / 12.0f));
         primed = true;
     }
     start.setTargetValue(p.start);
     length.setTargetValue(p.length);
     gain.setTargetValue(targetGain);
     pan.setTargetValue(p.pan);
+    pitchRatio.setTargetValue(std::exp2(p.pitch / 12.0f));
 
     const int n = sample.audio.getNumSamples();
     const float* srcL = sample.audio.getReadPointer(0);
@@ -76,11 +78,12 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
         } else {
             const double t = beats / beatsPerSample; // output time in samples since host beat 0
             const double k = std::floor(t / hop);
+            const double speed = srcSpeed * pitchRatio.getNextValue(); // grains read faster/slower = higher/lower
             for (double grain : {k, k - 1.0}) {
                 const double age = t - grain * hop; // 0 .. 2 * hop
                 const double w = std::sin(juce::MathConstants<double>::pi * age / (2.0 * hop));
                 const ChaosRead gc = chaosAt(p.chaos, loopBeats, grain * hop * beatsPerSample);
-                double rel = mapPos(loopPhase(gc.beats)) + dir * gc.dir * age * srcSpeed - regionStart;
+                double rel = mapPos(loopPhase(gc.beats)) + dir * gc.dir * age * speed - regionStart;
                 rel -= std::floor(rel / regionLen) * regionLen; // wrap inside the region
                 const double edge = std::min(1.0, std::min(rel, regionLen - rel) / srcFade);
                 const auto amp = static_cast<float>(w * w * edge); // the two sin^2 windows sum to exactly 1

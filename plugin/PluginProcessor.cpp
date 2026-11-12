@@ -21,6 +21,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
         layout.add(std::make_unique<juce::AudioParameterFloat>(id("start"), label("Start"), 0.0f, 1.0f, 0.0f),
                    std::make_unique<juce::AudioParameterFloat>(id("length"), label("Length"), 0.01f, 1.0f, 1.0f),
                    std::make_unique<juce::AudioParameterChoice>(id("bars"), label("Bars"), kBarNames, 2),
+                   std::make_unique<juce::AudioParameterFloat>(id("pitch"), label("Pitch"),
+                       juce::NormalisableRange<float>(-24.0f, 24.0f, 1.0f), 0.0f,
+                       juce::AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int) {
+                           const int st = juce::roundToInt(v);
+                           return (st > 0 ? "+" : "") + juce::String(st) + " st";
+                       })),
                    std::make_unique<juce::AudioParameterBool>(id("reverse"), label("Reverse"), false),
                    std::make_unique<juce::AudioParameterBool>(id("warp"), label("Warp"), true),
                    std::make_unique<juce::AudioParameterFloat>(id("level"), label("Level"),
@@ -43,7 +49,7 @@ MensisProcessor::MensisProcessor()
       params(*this, nullptr, "MensisSampler", makeLayout()) {
     for (size_t t = 0; t < kNumTracks; ++t) {
         auto raw = [&](const char* name) { return params.getRawParameterValue(paramId(t, name)); };
-        trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan"), raw("warp"), raw("chaos")};
+        trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan"), raw("warp"), raw("chaos"), raw("pitch")};
         playPos[t].store(-1.0f);
     }
     chaosAmount = params.getRawParameterValue("chaos");
@@ -103,6 +109,7 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             lp.chaos.amount = chaosAmount->load() * tp.chaos->load();
             lp.chaos.looseness = feel == 0 ? 0.0f : feel == 1 ? lp.chaos.amount : 1.0f; // Loose: drifts more as Chaos rises
             lp.chaos.stream = static_cast<uint32_t>(t);
+            lp.pitch = tp.pitch->load();
             tracks[t].render(*sample, lp, ppq, bpm, buffer, 0, numSamples);
             playPos[t].store(tracks[t].position(), std::memory_order_relaxed);
         }

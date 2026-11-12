@@ -92,10 +92,11 @@ TEST_CASE("warp keeps the pitch when the loop is stretched") {
     for (int i = 0; i < s.audio.getNumSamples(); ++i)
         s.audio.setSample(0, i, std::sin(2.0f * juce::MathConstants<float>::pi * 440.0f * i / static_cast<float>(kRate)));
 
-    auto crossingsPerSecond = [&](bool warp) {
+    auto crossingsPerSecond = [&](bool warp, float pitch = 0.0f) {
         mensis::LoopParams p;
         p.levelDb = 0.0f;
         p.warp = warp;
+        p.pitch = pitch;
         mensis::LoopTrack track;
         track.prepare(kRate);
         const int len = static_cast<int>(kRate); // render 1 s from beat 0.5, away from the seam
@@ -106,7 +107,8 @@ TEST_CASE("warp keeps the pitch when the loop is stretched") {
         const auto stats = mensis::measure({out.getReadPointer(0), static_cast<size_t>(len)});
         CHECK(stats.finite);
         CHECK(stats.peak <= 1.0f);
-        CHECK(stats.maxStep < 0.1f); // a 440 Hz sine steps at most ~0.058 per sample: no clicks between grains
+        // A 440 Hz sine steps at most ~0.058 per sample (more when pitched up): no clicks between grains.
+        CHECK(stats.maxStep < 0.1f * std::exp2(std::max(0.0f, pitch) / 12.0f));
         int crossings = 0;
         for (int i = 1; i < len; ++i) crossings += (out.getSample(0, i - 1) < 0.0f) != (out.getSample(0, i) < 0.0f);
         return crossings / 2.0;
@@ -114,4 +116,7 @@ TEST_CASE("warp keeps the pitch when the loop is stretched") {
     CHECK_THAT(crossingsPerSecond(false), WithinAbs(220.0, 3.0));
     // Overlapping grains of a pure sine partly cancel now and then, which adds a few extra crossings.
     CHECK_THAT(crossingsPerSecond(true), WithinAbs(440.0, 25.0));
+    // Pitch moves it in Warp without changing the timing: +12 = one octave up, -12 = one down.
+    CHECK_THAT(crossingsPerSecond(true, 12.0f), WithinAbs(880.0, 50.0));
+    CHECK_THAT(crossingsPerSecond(true, -12.0f), WithinAbs(220.0, 15.0));
 }

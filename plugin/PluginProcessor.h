@@ -55,6 +55,7 @@ private:
         std::atomic<float>* pan;
         std::atomic<float>* warp;
         std::atomic<float>* chaos;
+        std::atomic<float>* pitch;
     };
     std::array<TrackParams, kNumTracks> trackParams{};
     std::array<mensis::LoopTrack, kNumTracks> tracks;

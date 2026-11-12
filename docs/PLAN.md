@@ -28,7 +28,10 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
 - Saved with the Live set: params + sample file paths (not the audio itself).
 - Warp (default on): keeps the original pitch. Two overlapping 60 ms grains read at normal speed; each new
   grain starts where the tape-style position is, so timing is still locked to Live. Warp off = tape mode.
-- Waveform per track: loop region shaded, white playhead, drag near an edge to move Start or End.
+- Waveform per track: loop region lit, white playhead. Drag inside the region to move it, drag an edge to
+  resize, drag on empty waveform to draw a new region, double-click for the whole sample.
+- Pitch (per track, -24..+24 semitones): Warp only; grains read faster/slower. Greyed out in tape mode.
+  Param `t1.pitch` (…t4) sits after Bars, so a track is now 9 params and Push banks no longer line up with tracks.
 - Param IDs: `t1.start`, `t1.length`, `t1.bars`, `t1.reverse`, `t1.warp`, `t1.level`, `t1.pan` (…t4). 28 params, 7 per track.
 
 ## Section 2 notes: Chaos

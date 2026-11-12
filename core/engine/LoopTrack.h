@@ -13,6 +13,7 @@ struct LoopParams {
     float pan = 0.0f;      // -1 left .. +1 right (balance)
     bool warp = false;     // true: keep the original pitch, stretch time with overlapping grains
     ChaosParams chaos;     // amount 0 = plays clean
+    float pitch = 0.0f;    // semitones; Warp only (in tape mode the speed sets the pitch)
 };
 
 // One looping track. The play position comes straight from the host's beat position,
@@ -33,7 +34,7 @@ private:
     double sampleRate = 48000.0;
     float lastPos = 0.0f;
     bool primed = false; // first render jumps straight to the param values instead of gliding from 0
-    juce::SmoothedValue<float> start, length, gain, pan;
+    juce::SmoothedValue<float> start, length, gain, pan, pitchRatio;
 };
 
 } // namespace mensis
