@@ -63,9 +63,7 @@ public:
         g.drawRect(box, 1.0f);
     }
 
-    juce::Font getTextButtonFont(juce::TextButton& b, int) override {
-        return font(b.getProperties()["big"] ? 18.0f : 11.0f, true); // "big": the track number buttons
-    }
+    juce::Font getTextButtonFont(juce::TextButton&, int) override { return font(11.0f, true); }
     juce::Font getLabelFont(juce::Label& l) override { return l.getFont(); }
     juce::Label* createSliderTextBox(juce::Slider& s) override {
         auto* l = LookAndFeel_V4::createSliderTextBox(s);
@@ -431,6 +429,27 @@ private:
     float downStart = 0.0f, downEnd = 1.0f, downX = 0.0f;
 };
 
+// Play button: white box with a black triangle when the track plays, dim outline when it's off.
+class PlayButton final : public juce::Button {
+public:
+    PlayButton() : juce::Button("Play") { setClickingTogglesState(true); }
+
+    void paintButton(juce::Graphics& g, bool over, bool) override {
+        const auto box = getLocalBounds().toFloat().reduced(0.5f);
+        const bool on = getToggleState();
+        g.setColour(on ? MensisLook::fg : over ? MensisLook::fg.withAlpha(0.12f) : MensisLook::bg);
+        g.fillRect(box);
+        g.setColour(on ? MensisLook::fg : MensisLook::mid);
+        g.drawRect(box, 1.0f);
+        const auto c = box.getCentre();
+        const float s = std::min(box.getWidth(), box.getHeight()) * 0.22f;
+        juce::Path tri;
+        tri.addTriangle(c.x - s * 0.8f, c.y - s, c.x - s * 0.8f, c.y + s, c.x + s, c.y);
+        g.setColour(on ? MensisLook::bg : MensisLook::mid);
+        g.fillPath(tri);
+    }
+};
+
 // A Live-style knob: name above, value below. Drag up/down, double-click resets.
 class Knob final : public juce::Component {
 public:
@@ -465,9 +484,12 @@ public:
 
     TrackStrip(MensisProcessor& p, size_t t) : proc(p), track(t), wave(p, t) {
         // Track number = on/off button (like Live's track activator): lit = playing.
-        attachToggle(power, "on", juce::String(t + 1).toRawUTF8());
-        power.button.getProperties().set("big", true);
-        power.button.setTooltip("Track on/off");
+        number.setText(juce::String(t + 1), juce::dontSendNotification);
+        number.setFont(MensisLook::font(22.0f, true));
+        play.setTooltip("Play / mute this track");
+        playAttachment = std::make_unique<juce::ButtonParameterAttachment>(*p.params.getParameter(id("on")), play);
+        addAndMakeVisible(number);
+        addAndMakeVisible(play);
         name.setFont(MensisLook::font(12.0f));
         name.setColour(juce::Label::textColourId, MensisLook::mid);
         load.setButtonText("LOAD");
@@ -528,7 +550,8 @@ public:
         name.setText(file == juce::File{} ? "empty" : file.getFileNameWithoutExtension(), juce::dontSendNotification);
         knobs[3].setEnabled(toggles[1].button.getToggleState()); // Pitch only works with Warp on
         remove.setEnabled(file != juce::File{});
-        wave.setAlpha(power.button.getToggleState() ? 1.0f : 0.3f); // off tracks fade back
+        wave.setAlpha(play.getToggleState() ? 1.0f : 0.3f); // muted tracks fade back
+        number.setColour(juce::Label::textColourId, play.getToggleState() ? MensisLook::fg : MensisLook::mid);
         wave.repaint();
     }
 
@@ -540,7 +563,8 @@ public:
     void resized() override {
         auto area = getLocalBounds().reduced(0, 10);
         auto head = area.removeFromTop(24);
-        power.button.setBounds(head.removeFromLeft(28));
+        number.setBounds(head.removeFromLeft(26));
+        play.setBounds(head.removeFromLeft(28).reduced(2, 1));
         head.removeFromLeft(8);
         load.setBounds(head.removeFromLeft(56).reduced(0, 2));
         head.removeFromLeft(4);
@@ -587,7 +611,10 @@ private:
     std::array<Toggle, 3> toggles;
     std::array<Knob, 7> grainKnobs;
     std::array<Knob, 8> resKnobs, colorKnobs;
-    Toggle freeze, power;
+    Toggle freeze;
+    juce::Label number;
+    PlayButton play;
+    std::unique_ptr<juce::ButtonParameterAttachment> playAttachment;
 };
 
 class MensisEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget,
