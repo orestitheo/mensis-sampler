@@ -7,7 +7,8 @@
 
 static int usage() {
     std::cerr << "usage: mensis-cli loop <sample> --out file.wav [--bpm 120] [--bars 1] [--seconds 8]\n"
-                 "                  [--start 0] [--length 1] [--reverse 0|1] [--level -6] [--pan 0] [--warp 1] [--rate 48000]\n";
+                 "                  [--start 0] [--length 1] [--reverse 0|1] [--level -6] [--pan 0] [--warp 1] [--rate 48000]\n"
+                 "                  [--chaos 0] [--seed 1] [--grid 0.25] [--loose 0]\n";
     return 1;
 }
 
@@ -28,7 +29,7 @@ int main(int argc, char* argv[]) {
     if (argc < 3 || std::string(argv[1]) != "loop") return usage();
 
     std::map<std::string, std::string> opt{{"--bpm", "120"}, {"--bars", "1"}, {"--seconds", "8"}, {"--start", "0"},
-        {"--length", "1"}, {"--reverse", "0"}, {"--level", "-6"}, {"--pan", "0"}, {"--warp", "1"}, {"--rate", "48000"}, {"--out", ""}};
+        {"--length", "1"}, {"--reverse", "0"}, {"--level", "-6"}, {"--pan", "0"}, {"--warp", "1"}, {"--chaos", "0"}, {"--seed", "1"}, {"--grid", "0.25"}, {"--loose", "0"}, {"--rate", "48000"}, {"--out", ""}};
     for (int i = 3; i + 1 < argc; i += 2) {
         if (!opt.contains(argv[i])) return usage();
         opt[argv[i]] = argv[i + 1];
@@ -41,10 +42,14 @@ int main(int argc, char* argv[]) {
     auto sample = mensis::loadSample(cwd.getChildFile(argv[2]));
     if (sample == nullptr) { std::cerr << "can't read " << argv[2] << "\n"; return 1; }
 
-    const mensis::LoopParams params{static_cast<float>(num("--start")), static_cast<float>(num("--length")),
+    mensis::LoopParams params{static_cast<float>(num("--start")), static_cast<float>(num("--length")),
                                     num("--bars"), num("--reverse") != 0.0,
                                     static_cast<float>(num("--level")), static_cast<float>(num("--pan")),
                                     num("--warp") != 0.0};
+    params.chaos.amount = static_cast<float>(num("--chaos"));
+    params.chaos.gridBeats = num("--grid");
+    params.chaos.looseness = static_cast<float>(num("--loose"));
+    params.chaos.seed = params.chaos.nextSeed = static_cast<uint32_t>(num("--seed"));
     mensis::LoopTrack track;
     track.prepare(rate);
     juce::AudioBuffer<float> out(2, static_cast<int>(seconds * rate));

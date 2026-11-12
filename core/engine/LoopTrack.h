@@ -1,4 +1,5 @@
 #pragma once
+#include "Chaos.h"
 #include "Sample.h"
 
 namespace mensis {
@@ -11,6 +12,7 @@ struct LoopParams {
     float levelDb = -6.0f; // -60 = silent
     float pan = 0.0f;      // -1 left .. +1 right (balance)
     bool warp = false;     // true: keep the original pitch, stretch time with overlapping grains
+    ChaosParams chaos;     // amount 0 = plays clean
 };
 
 // One looping track. The play position comes straight from the host's beat position,

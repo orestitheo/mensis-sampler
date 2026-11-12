@@ -30,3 +30,17 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
   grain starts where the tape-style position is, so timing is still locked to Live. Warp off = tape mode.
 - Waveform per track: loop region shaded, white playhead, drag near an edge to move Start or End.
 - Param IDs: `t1.start`, `t1.length`, `t1.bars`, `t1.reverse`, `t1.warp`, `t1.level`, `t1.pan` (…t4). 28 params, 7 per track.
+
+## Section 2 notes: Chaos
+- Global CHAOS (0..1) × per-track CHAOS depth (default 100%, set 0 to keep a track clean).
+- Time is cut into grid steps (GRID: 1/32..1/4). At each step a seeded coin flip decides if an event starts.
+  FEEL: Grid = events start on the step, Loose = start drifts more as Chaos rises, Free = anywhere in the step.
+- No state: every decision is a hash of (seed, track, step), so the same seed + same song position always
+  gives the same glitch, even after jumping around in Live.
+- Events, in order of appearance as Chaos rises: Jump (play from another step of the loop), Reverse,
+  Stutter (repeat a 1, 1/2 or 1/4 step slice), Dropout (silence), Tape stop (slows to a halt, pitch falls).
+  Each lasts 1, 2 or 4 steps. Raising Chaos only adds events; the ones you already hear stay.
+- Every jump in the audio gets a 5 ms dip (fade out/in) so there are no clicks.
+- SEED is a param (saved with the set). RE-ROLL picks a new seed; it takes over at the next bar.
+- New param IDs: `chaos`, `chaos.grid`, `chaos.feel`, `seed`, `t1.chaos` (…t4). Track params first
+  (8 per track = one Push bank each), global Chaos params in bank 5.

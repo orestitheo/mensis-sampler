@@ -213,8 +213,8 @@ public:
         load.onClick = [this] { if (onLoad) onLoad(); };
         for (auto* c : std::initializer_list<juce::Component*>{&number, &name, &load, &wave}) addAndMakeVisible(c);
 
-        const std::array<std::pair<const char*, const char*>, 5> knobIds{
-            {{"start", "START"}, {"length", "LENGTH"}, {"bars", "BARS"}, {"level", "LEVEL"}, {"pan", "PAN"}}};
+        const std::array<std::pair<const char*, const char*>, 6> knobIds{{{"start", "START"}, {"length", "LENGTH"},
+            {"bars", "BARS"}, {"level", "LEVEL"}, {"pan", "PAN"}, {"chaos", "CHAOS"}}};
         for (size_t i = 0; i < knobs.size(); ++i) {
             knobs[i].attach(*p.params.getParameter(id(knobIds[i].first)), knobIds[i].second);
             addAndMakeVisible(knobs[i]);
@@ -248,7 +248,7 @@ public:
         name.setBounds(head.withTrimmedLeft(8));
         area.removeFromTop(6);
 
-        auto right = area.removeFromRight(7 * 60);
+        auto right = area.removeFromRight(8 * 60);
         wave.setBounds(area.withTrimmedRight(16));
         for (auto& k : knobs) k.setBounds(right.removeFromLeft(60));
         right = right.withSizeKeepingCentre(right.getWidth() - 8, 48);
@@ -267,7 +267,7 @@ private:
     juce::Label number, name;
     juce::TextButton load;
     WaveformView wave;
-    std::array<Knob, 5> knobs;
+    std::array<Knob, 6> knobs;
     std::array<Toggle, 2> toggles;
 };
 
@@ -281,8 +281,24 @@ public:
             strips[t]->onLoad = [this, t] { chooseFile(t); };
             addAndMakeVisible(*strips[t]);
         }
+        const std::array<std::pair<const char*, const char*>, 4> globalIds{
+            {{"chaos", "CHAOS"}, {"chaos.grid", "GRID"}, {"chaos.feel", "FEEL"}, {"seed", "SEED"}}};
+        for (size_t i = 0; i < globalKnobs.size(); ++i) {
+            globalKnobs[i].attach(*p.params.getParameter(globalIds[i].first), globalIds[i].second);
+            addAndMakeVisible(globalKnobs[i]);
+        }
+        reroll.setButtonText("RE-ROLL");
+        reroll.onClick = [this] { // new seed; the audio switches to it at the next bar
+            auto* seed = proc.params.getParameter("seed");
+            const int now = static_cast<int>(seed->convertFrom0to1(seed->getValue()));
+            const int next = (now + 1 + juce::Random::getSystemRandom().nextInt(9999)) % 10000; // never the same seed
+            seed->beginChangeGesture();
+            seed->setValueNotifyingHost(seed->convertTo0to1(static_cast<float>(next)));
+            seed->endChangeGesture();
+        };
+        addAndMakeVisible(reroll);
         sendLookAndFeelChange(); // the strips were built before they had a parent; restyle their knob value boxes
-        setSize(900, 600);
+        setSize(980, 640);
         timerCallback();
         startTimerHz(30); // moves the playheads; also picks up samples restored from a saved Live set
     }
@@ -301,6 +317,11 @@ public:
     }
 
     void resized() override {
+        auto head = getLocalBounds().reduced(20, 0).removeFromTop(kHeader).reduced(0, 12);
+        reroll.setBounds(head.removeFromRight(80).withSizeKeepingCentre(80, 24));
+        head.removeFromRight(8);
+        for (size_t i = globalKnobs.size(); i-- > 0;) globalKnobs[i].setBounds(head.removeFromRight(i == 0 ? 76 : 60));
+
         auto area = getLocalBounds().reduced(20, 0).withTrimmedTop(kHeader).withTrimmedBottom(12);
         const int h = area.getHeight() / static_cast<int>(MensisProcessor::kNumTracks);
         for (auto& s : strips) s->setBounds(area.removeFromTop(h));
@@ -354,5 +375,7 @@ private:
     MensisLook look; // declared first so it outlives every child that uses it
     MensisProcessor& proc;
     std::array<std::unique_ptr<TrackStrip>, MensisProcessor::kNumTracks> strips;
+    std::array<Knob, 4> globalKnobs;
+    juce::TextButton reroll;
     std::unique_ptr<juce::FileChooser> chooser;
 };

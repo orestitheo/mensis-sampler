@@ -33,6 +33,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
     const double loopBeats = p.bars * 4.0; // shortcut: assumes 4/4; read the host time signature if odd meters matter
     const double loopSamples = loopBeats / beatsPerSample;
     const double fadeSamples = 0.005 * sampleRate; // 5 ms fade at the loop seam hides the jump (no click)
+    const double fadeBeats = fadeSamples * beatsPerSample;
 
     // shortcut: linear interpolation aliases when sped up a lot; upgrade to sinc/hermite if it sounds harsh
     auto read = [&](const float* src, double pos) {
@@ -58,14 +59,16 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
 
     for (int i = 0; i < numSamples; ++i) {
         const double beats = ppq + i * beatsPerSample;
-        const double phase = loopPhase(beats);
+        const ChaosRead chaos = chaosAt(p.chaos, loopBeats, beats);
+        const double phase = loopPhase(chaos.beats);
         const double regionStart = static_cast<double>(start.getNextValue()) * (n - 1);
         const double regionLen = std::max(1.0, static_cast<double>(length.getNextValue()) * (n - 1 - regionStart));
         auto mapPos = [&](double ph) { return regionStart + (p.reverse ? 1.0 - ph : ph) * regionLen; };
         const double pos = mapPos(phase);
 
-        float l = 0.0f, r = 0.0f, g = gain.getNextValue();
-        if (!p.warp) {
+        float l = 0.0f, r = 0.0f;
+        float g = gain.getNextValue() * chaos.gain * static_cast<float>(std::min(1.0, chaos.edgeBeats / fadeBeats));
+        if (!p.warp || chaos.tape) {
             l = read(srcL, pos);
             r = read(srcR, pos);
             const double samplesFromSeam = std::min(phase, 1.0 - phase) * loopSamples;
@@ -76,7 +79,8 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
             for (double grain : {k, k - 1.0}) {
                 const double age = t - grain * hop; // 0 .. 2 * hop
                 const double w = std::sin(juce::MathConstants<double>::pi * age / (2.0 * hop));
-                double rel = mapPos(loopPhase(grain * hop * beatsPerSample)) + dir * age * srcSpeed - regionStart;
+                const ChaosRead gc = chaosAt(p.chaos, loopBeats, grain * hop * beatsPerSample);
+                double rel = mapPos(loopPhase(gc.beats)) + dir * gc.dir * age * srcSpeed - regionStart;
                 rel -= std::floor(rel / regionLen) * regionLen; // wrap inside the region
                 const double edge = std::min(1.0, std::min(rel, regionLen - rel) / srcFade);
                 const auto amp = static_cast<float>(w * w * edge); // the two sin^2 windows sum to exactly 1

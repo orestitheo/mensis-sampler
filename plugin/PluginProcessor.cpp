@@ -5,6 +5,9 @@ namespace {
 
 const juce::StringArray kBarNames{"1/4", "1/2", "1", "2", "4", "8", "16"};
 constexpr std::array<double, 7> kBarValues{0.25, 0.5, 1, 2, 4, 8, 16};
+const juce::StringArray kGridNames{"1/32", "1/16", "1/8", "1/4"};
+constexpr std::array<double, 4> kGridBeats{0.125, 0.25, 0.5, 1.0};
+const juce::StringArray kFeelNames{"Grid", "Loose", "Free"};
 
 // Param IDs are stable: never rename once used in Live (automation and presets would break).
 juce::String paramId(size_t track, const char* name) { return "t" + juce::String(track + 1) + "." + name; }
@@ -22,8 +25,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                    std::make_unique<juce::AudioParameterBool>(id("warp"), label("Warp"), true),
                    std::make_unique<juce::AudioParameterFloat>(id("level"), label("Level"),
                        juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f), -6.0f),
-                   std::make_unique<juce::AudioParameterFloat>(id("pan"), label("Pan"), -1.0f, 1.0f, 0.0f));
+                   std::make_unique<juce::AudioParameterFloat>(id("pan"), label("Pan"), -1.0f, 1.0f, 0.0f),
+                   std::make_unique<juce::AudioParameterFloat>(id("chaos"), label("Chaos"), 0.0f, 1.0f, 1.0f));
     }
+    // Global Chaos: after the tracks, so each track stays one Push bank of 8.
+    layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"chaos", 1}, "Chaos", 0.0f, 1.0f, 0.0f),
+               std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"chaos.grid", 1}, "Chaos Grid", kGridNames, 1),
+               std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"chaos.feel", 1}, "Chaos Feel", kFeelNames, 0),
+               std::make_unique<juce::AudioParameterInt>(juce::ParameterID{"seed", 1}, "Seed", 0, 9999, 1));
     return layout;
 }
 
@@ -34,9 +43,13 @@ MensisProcessor::MensisProcessor()
       params(*this, nullptr, "MensisSampler", makeLayout()) {
     for (size_t t = 0; t < kNumTracks; ++t) {
         auto raw = [&](const char* name) { return params.getRawParameterValue(paramId(t, name)); };
-        trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan"), raw("warp")};
+        trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan"), raw("warp"), raw("chaos")};
         playPos[t].store(-1.0f);
     }
+    chaosAmount = params.getRawParameterValue("chaos");
+    chaosGrid = params.getRawParameterValue("chaos.grid");
+    chaosFeel = params.getRawParameterValue("chaos.feel");
+    seedParam = params.getRawParameterValue("seed");
 }
 
 void MensisProcessor::prepareToPlay(double sampleRate, int) {
@@ -60,15 +73,36 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     if (!playing)
         for (auto& p : playPos) p.store(-1.0f, std::memory_order_relaxed);
+    // Re-roll: a new seed takes over at the next bar line. Steps before it keep the old seed, so an event
+    // already playing finishes cleanly.
+    const auto wantSeed = static_cast<uint32_t>(seedParam->load());
+    if (!seedStarted) {
+        seedOld = seedNew = wantSeed;
+        seedStarted = true;
+    } else if (wantSeed != seedNew) {
+        if (ppq >= seedSwitch) seedOld = seedNew;
+        seedNew = wantSeed;
+        seedSwitch = std::ceil(ppq / 4.0) * 4.0; // shortcut: assumes 4/4, like the loop length
+    }
+    mensis::ChaosParams chaos;
+    chaos.gridBeats = kGridBeats[static_cast<size_t>(chaosGrid->load())];
+    const auto feel = static_cast<int>(chaosFeel->load());
+    chaos.seed = seedOld;
+    chaos.nextSeed = seedNew;
+    chaos.switchBeats = seedSwitch;
+
     if (playing && buffer.getNumChannels() >= 2) {
         for (size_t t = 0; t < kNumTracks; ++t) {
             const auto* sample = liveSamples[t].load(std::memory_order_acquire);
             playPos[t].store(-1.0f, std::memory_order_relaxed);
             if (sample == nullptr) continue;
             const auto& tp = trackParams[t];
-            const mensis::LoopParams lp{tp.start->load(), tp.length->load(),
+            mensis::LoopParams lp{tp.start->load(), tp.length->load(),
                                   kBarValues[static_cast<size_t>(tp.bars->load())], tp.reverse->load() > 0.5f,
-                                  tp.level->load(), tp.pan->load(), tp.warp->load() > 0.5f};
+                                  tp.level->load(), tp.pan->load(), tp.warp->load() > 0.5f, chaos};
+            lp.chaos.amount = chaosAmount->load() * tp.chaos->load();
+            lp.chaos.looseness = feel == 0 ? 0.0f : feel == 1 ? lp.chaos.amount : 1.0f; // Loose: drifts more as Chaos rises
+            lp.chaos.stream = static_cast<uint32_t>(t);
             tracks[t].render(*sample, lp, ppq, bpm, buffer, 0, numSamples);
             playPos[t].store(tracks[t].position(), std::memory_order_relaxed);
         }
