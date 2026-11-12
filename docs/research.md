@@ -1,4 +1,4 @@
-# Research (Nov 2026)
+# Research (Nov 2026) — Mensis Sampler
 
 ## Torso S-4 — what inspires us
 - 4 stereo tracks. Each runs 5 devices in series, each bypassable:
@@ -21,7 +21,7 @@
 | Build | CMake + Ninja, CPM for deps | JUCE's native build; deps pinned, nothing vendored. |
 | Tests | Catch2 3.9.1 | Standard; used by the Pamplejuce template. |
 | Validation | pluginval 1.0.4 | Loads the plugin like a host and stress-tests it. |
-| Offline checks | demea-cli + Python | Render and inspect audio without a DAW. |
+| Offline checks | mensis-cli + Python | Render and inspect audio without a DAW. |
 
 Not chosen: Rust/nih-plug (no AU, fewer examples), CLAP (not in JUCE 9 yet, Live doesn't need it),
 Pamplejuce as a base (signing/IPP/Windows CI we don't need yet; used as a reference only).

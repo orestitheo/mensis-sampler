@@ -1,4 +1,9 @@
 # Pure DSP + logic. No JUCE plugin/GUI deps, so it's testable without a host.
-add_library(demea_core INTERFACE)
-target_include_directories(demea_core INTERFACE ${PROJECT_SOURCE_DIR})
-target_compile_features(demea_core INTERFACE cxx_std_20)
+# INTERFACE so JUCE module code is compiled once into each final target (plugin, cli, tests).
+add_library(mensis_core INTERFACE)
+target_sources(mensis_core INTERFACE
+    ${CMAKE_CURRENT_SOURCE_DIR}/engine/Sample.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/engine/LoopTrack.cpp)
+target_include_directories(mensis_core INTERFACE ${PROJECT_SOURCE_DIR})
+target_compile_definitions(mensis_core INTERFACE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_link_libraries(mensis_core INTERFACE juce::juce_audio_formats)

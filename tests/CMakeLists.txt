@@ -1,4 +1,5 @@
-add_executable(demea_tests RenderStatsTest.cpp)
-target_link_libraries(demea_tests PRIVATE demea_core Catch2::Catch2WithMain)
+juce_add_console_app(mensis_tests)
+target_sources(mensis_tests PRIVATE RenderStatsTest.cpp LoopTrackTest.cpp)
+target_link_libraries(mensis_tests PRIVATE mensis_core Catch2::Catch2WithMain)
 include(${Catch2_SOURCE_DIR}/extras/Catch.cmake)
-catch_discover_tests(demea_tests)
+catch_discover_tests(mensis_tests)
