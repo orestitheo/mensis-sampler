@@ -1,0 +1,7 @@
+build/
+out/
+tools/bin/
+.cache/
+.DS_Store
+.vscode/
+.idea/
