@@ -159,3 +159,26 @@ TEST_CASE("sliced + warp plays hits Beats-style: on time and crisp at another te
         CHECK(stats.maxStep < 0.2f); // a 1 kHz ping steps up to ~0.13 per sample: no clicks
     }
 }
+
+TEST_CASE("turning a track off fades it out without a click") {
+    mensis::Sample s;
+    s.sampleRate = kRate;
+    s.audio.setSize(1, static_cast<int>(kRate));
+    for (int i = 0; i < s.audio.getNumSamples(); ++i)
+        s.audio.setSample(0, i, 0.5f * std::sin(2.0f * juce::MathConstants<float>::pi * 440.0f * i / static_cast<float>(kRate)));
+    mensis::LoopParams p;
+    p.levelDb = 0.0f;
+    mensis::LoopTrack track;
+    track.prepare(kRate);
+    juce::AudioBuffer<float> out(2, 24000);
+    out.clear();
+    for (int pos = 0; pos < 24000; pos += 512) {
+        p.on = pos < 4800; // off after 0.1 s
+        track.render(s, p, 0.25 + pos * kBpm / (60.0 * kRate), kBpm, out, pos, std::min(512, 24000 - pos));
+    }
+    const auto stats = mensis::measure({out.getReadPointer(0), 24000});
+    CHECK(stats.maxStep < 0.04f); // a 0.5 * 440 Hz sine steps ~0.029: the fade adds no click
+    float tail = 0.0f;
+    for (int i = 12000; i < 24000; ++i) tail = std::max(tail, std::abs(out.getSample(0, i)));
+    CHECK(tail == 0.0f); // silent once faded
+}

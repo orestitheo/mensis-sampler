@@ -11,7 +11,7 @@ void LoopTrack::prepare(double newSampleRate) {
 
 void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, double bpm,
                        juce::AudioBuffer<float>& out, int startSample, int numSamples) {
-    const float targetGain = juce::Decibels::decibelsToGain(p.levelDb, -60.0f);
+    const float targetGain = p.on ? juce::Decibels::decibelsToGain(p.levelDb, -60.0f) : 0.0f;
     if (!primed) {
         start.setCurrentAndTargetValue(p.start);
         length.setCurrentAndTargetValue(p.length);

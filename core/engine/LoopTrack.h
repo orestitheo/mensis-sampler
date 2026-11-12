@@ -17,6 +17,7 @@ struct LoopParams {
     float pitch = 0.0f;    // semitones; Warp only (in tape mode the speed sets the pitch)
     bool slice = false;    // Chaos snaps to the sample's hits; with Warp, hits play Beats-style
     GrainParams grains;    // mix 0 = off
+    bool on = true;        // off = fades out over 50 ms (track mute)
 };
 
 // One looping track. The play position comes straight from the host's beat position,

@@ -18,7 +18,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
     for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) {
         auto id = [t](const char* name) { return juce::ParameterID{paramId(t, name), 1}; };
         auto label = [t](const char* name) { return "T" + juce::String(t + 1) + " " + name; };
-        layout.add(std::make_unique<juce::AudioParameterFloat>(id("start"), label("Start"), 0.0f, 1.0f, 0.0f),
+        layout.add(std::make_unique<juce::AudioParameterBool>(id("on"), label("On"), true),
+                   std::make_unique<juce::AudioParameterFloat>(id("start"), label("Start"), 0.0f, 1.0f, 0.0f),
                    std::make_unique<juce::AudioParameterFloat>(id("length"), label("Length"), 0.01f, 1.0f, 1.0f),
                    std::make_unique<juce::AudioParameterChoice>(id("bars"), label("Bars"), kBarNames, 2),
                    std::make_unique<juce::AudioParameterFloat>(id("pitch"), label("Pitch"),
@@ -76,7 +77,7 @@ MensisProcessor::MensisProcessor()
         auto raw = [&](const char* name) { return params.getRawParameterValue(paramId(t, name)); };
         trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan"), raw("warp"), raw("chaos"), raw("pitch"), raw("slice"),
                           raw("grain.mix"), raw("grain.size"), raw("grain.density"), raw("grain.spray"),
-                          raw("grain.detune"), raw("grain.reverse"), raw("grain.width"), raw("grain.freeze")};
+                          raw("grain.detune"), raw("grain.reverse"), raw("grain.width"), raw("grain.freeze"), raw("on")};
         playPos[t].store(-1.0f);
         grainAnchor[t].store(-1.0f);
     }
@@ -142,6 +143,7 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             lp.chaos.stream = static_cast<uint32_t>(t);
             lp.pitch = tp.pitch->load();
             lp.slice = tp.slice->load() > 0.5f;
+            lp.on = tp.on->load() > 0.5f;
             lp.grains = {tp.grainMix->load(), tp.grainSize->load(), tp.grainDensity->load(), tp.grainSpray->load(),
                          tp.grainDetune->load(), tp.grainReverse->load(), tp.grainWidth->load(),
                          tp.grainFreeze->load() > 0.5f, lp.chaos.amount, seedNew, static_cast<uint32_t>(t)};
@@ -185,7 +187,14 @@ bool MensisProcessor::loadSample(size_t track, const juce::File& file, bool fres
         p->setValueNotifyingHost(p->convertTo0to1(static_cast<float>(best)));
     }
 
-    // Swap in the new sample. The old one may still be in use by the block that is running right now,
+    swapIn(track, std::move(sample));
+    return true;
+}
+
+void MensisProcessor::clearSample(size_t track) { swapIn(track, nullptr); }
+
+void MensisProcessor::swapIn(size_t track, std::unique_ptr<mensis::Sample> sample) {
+    // The old sample may still be in use by the block that is running right now,
     // so keep it until the audio thread has finished at least one more full block.
     liveSamples[track].store(sample.get(), std::memory_order_release);
     if (ownedSamples[track] != nullptr)
@@ -194,7 +203,6 @@ bool MensisProcessor::loadSample(size_t track, const juce::File& file, bool fres
 
     const auto done = blocksDone.load(std::memory_order_acquire);
     std::erase_if(retired, [done](const Retired& r) { return done > r.retiredAtBlock + 1; });
-    return true;
 }
 
 juce::File MensisProcessor::getSampleFile(size_t track) const {
@@ -217,6 +225,7 @@ void MensisProcessor::setStateInformation(const void* data, int sizeInBytes) {
     for (size_t t = 0; t < kNumTracks; ++t) {
         const auto path = state.getProperty(paramId(t, "file")).toString();
         if (path.isNotEmpty()) loadSample(t, juce::File(path), false);
+        else clearSample(t);
     }
 }
 

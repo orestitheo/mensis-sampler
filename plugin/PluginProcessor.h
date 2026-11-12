@@ -15,6 +15,7 @@ public:
     // Message thread only. fresh: a new load by the user (not a saved set): pick the bar count that fits the
     // sample at the current tempo, and turn SLICE on if it sounds like drums.
     bool loadSample(size_t track, const juce::File& file, bool fresh);
+    void clearSample(size_t track);               // message thread only
     juce::File getSampleFile(size_t track) const; // message thread only
     const mensis::Sample* getSample(size_t track) const { return ownedSamples[track].get(); } // message thread only
     // 0..1 where the track is playing in its sample, -1 when stopped or empty. Any thread.
@@ -76,6 +77,7 @@ private:
         std::atomic<float>* grainReverse;
         std::atomic<float>* grainWidth;
         std::atomic<float>* grainFreeze;
+        std::atomic<float>* on;
     };
     std::array<TrackParams, kNumTracks> trackParams{};
     std::array<mensis::LoopTrack, kNumTracks> tracks;
@@ -93,6 +95,7 @@ private:
     std::array<std::array<AtomicDot, mensis::GrainCloud::kMaxGrains>, kNumTracks> grainDots;
     std::array<std::atomic<float>, kNumTracks> grainAnchor{};
     void publishGrains(size_t track, const mensis::Sample* sample, bool on);
+    void swapIn(size_t track, std::unique_ptr<mensis::Sample> sample); // message thread
     std::atomic<float>* chaosAmount = nullptr;
     std::atomic<float>* chaosGrid = nullptr;
     std::atomic<float>* chaosFeel = nullptr;

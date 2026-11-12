@@ -63,7 +63,9 @@ public:
         g.drawRect(box, 1.0f);
     }
 
-    juce::Font getTextButtonFont(juce::TextButton&, int) override { return font(11.0f, true); }
+    juce::Font getTextButtonFont(juce::TextButton& b, int) override {
+        return font(b.getProperties()["big"] ? 18.0f : 11.0f, true); // "big": the track number buttons
+    }
     juce::Font getLabelFont(juce::Label& l) override { return l.getFont(); }
     juce::Label* createSliderTextBox(juce::Slider& s) override {
         auto* l = LookAndFeel_V4::createSliderTextBox(s);
@@ -299,13 +301,18 @@ public:
     std::function<void()> onLoad;
 
     TrackStrip(MensisProcessor& p, size_t t) : proc(p), track(t), wave(p, t) {
-        number.setText(juce::String(t + 1), juce::dontSendNotification);
-        number.setFont(MensisLook::font(22.0f, true));
+        // Track number = on/off button (like Live's track activator): lit = playing.
+        attachToggle(power, "on", juce::String(t + 1).toRawUTF8());
+        power.button.getProperties().set("big", true);
+        power.button.setTooltip("Track on/off");
         name.setFont(MensisLook::font(12.0f));
         name.setColour(juce::Label::textColourId, MensisLook::mid);
         load.setButtonText("LOAD");
         load.onClick = [this] { if (onLoad) onLoad(); };
-        for (auto* c : std::initializer_list<juce::Component*>{&number, &name, &load, &wave}) addAndMakeVisible(c);
+        remove.setButtonText(juce::CharPointer_UTF8("\xe2\x9c\x95")); // ✕
+        remove.setTooltip("Remove sample");
+        remove.onClick = [this] { proc.clearSample(track); refresh(); };
+        for (auto* c : std::initializer_list<juce::Component*>{&name, &load, &remove, &wave}) addAndMakeVisible(c);
 
         const std::array<std::pair<const char*, const char*>, 7> knobIds{{{"start", "START"}, {"length", "LENGTH"},
             {"bars", "BARS"}, {"pitch", "PITCH"}, {"level", "LEVEL"}, {"pan", "PAN"}, {"chaos", "CHAOS"}}};
@@ -340,6 +347,8 @@ public:
         const auto file = proc.getSampleFile(track);
         name.setText(file == juce::File{} ? "empty" : file.getFileNameWithoutExtension(), juce::dontSendNotification);
         knobs[3].setEnabled(toggles[1].button.getToggleState()); // Pitch only works with Warp on
+        remove.setEnabled(file != juce::File{});
+        wave.setAlpha(power.button.getToggleState() ? 1.0f : 0.3f); // off tracks fade back
         wave.repaint();
     }
 
@@ -351,8 +360,11 @@ public:
     void resized() override {
         auto area = getLocalBounds().reduced(0, 10);
         auto head = area.removeFromTop(24);
-        number.setBounds(head.removeFromLeft(28));
+        power.button.setBounds(head.removeFromLeft(28));
+        head.removeFromLeft(8);
         load.setBounds(head.removeFromLeft(56).reduced(0, 2));
+        head.removeFromLeft(4);
+        remove.setBounds(head.removeFromLeft(24).reduced(0, 2));
         name.setBounds(head.withTrimmedLeft(8));
         area.removeFromTop(6);
 
@@ -383,13 +395,13 @@ private:
     }
     MensisProcessor& proc;
     size_t track;
-    juce::Label number, name;
-    juce::TextButton load;
+    juce::Label name;
+    juce::TextButton load, remove;
     WaveformView wave;
     std::array<Knob, 7> knobs;
     std::array<Toggle, 3> toggles;
     std::array<Knob, 7> grainKnobs;
-    Toggle freeze;
+    Toggle freeze, power;
 };
 
 class MensisEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget,
