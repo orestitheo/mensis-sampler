@@ -2,6 +2,26 @@
 
 namespace mensis {
 
+namespace {
+
+// Swing: in each pair of grid steps the first is stretched by (1+s) and the second squeezed by (1-s),
+// so whatever sat on the 2nd step comes later. forward: straight time -> swung time; inverse: back.
+struct Swing {
+    double g = 0.25, s = 0.0;
+    double forward(double u) const {
+        if (s <= 0.0) return u;
+        const double pair = std::floor(u / (2.0 * g)) * 2.0 * g, r = u - pair;
+        return pair + (r < g ? r * (1.0 + s) : (1.0 + s) * g + (r - g) * (1.0 - s));
+    }
+    double inverse(double t) const {
+        if (s <= 0.0) return t;
+        const double pair = std::floor(t / (2.0 * g)) * 2.0 * g, r = t - pair, split = (1.0 + s) * g;
+        return pair + (r < split ? r / (1.0 + s) : g + (r - split) / (1.0 - s));
+    }
+};
+
+} // namespace
+
 void LoopTrack::prepare(double newSampleRate) {
     sampleRate = newSampleRate;
     for (auto* v : {&start, &length, &gain, &pan, &pitchRatio, &grainMix}) v->reset(sampleRate, 0.05); // 50 ms glide, no zipper noise
@@ -64,6 +84,8 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
     LoopParams lp = p; // chaos sees this block's hits
     lp.chaos.slices = p.slice && numSlices > 1 ? std::span<const double>(sliceBeats.data(), numSlices)
                                                : std::span<const double>{};
+    lp.chaos.beat = p.beat;
+    if (p.beat) lp.chaos.looseness = 0.0f; // BEAT mode is always exactly on the grid
     const bool beatsMode = p.slice && p.warp && numSlices > 1;
     const double secondsPerPhase = loopBeats * 60.0 / bpm;
 
@@ -89,8 +111,13 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
     const double srcFade = 0.005 * sample.sampleRate;        // 5 ms fade at the region edges, in file samples
     const double dir = p.reverse ? -1.0 : 1.0;
 
+    // Swing moves time, not pitch, so it only applies with Warp (in tape mode it would wobble the pitch).
+    const Swing swing{lp.chaos.gridBeats, p.warp ? std::clamp(p.swing, 0.0, 0.5) : 0.0};
+    const double secondsPerBeat = 60.0 / bpm;
+
     for (int i = 0; i < numSamples; ++i) {
-        const double beats = ppq + i * beatsPerSample;
+        const double real = ppq + i * beatsPerSample; // host beats
+        const double beats = swing.inverse(real);     // the straight grid time this moment stands for
         const ChaosRead chaos = chaosAt(lp.chaos, loopBeats, beats);
         const double phase = loopPhase(chaos.beats);
         const double regionStart = static_cast<double>(start.getNextValue()) * (n - 1);
@@ -112,6 +139,8 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
             const double filePerPhase = secondsPerPhase * sample.sampleRate * pitchRatio.getNextValue();
             const auto idx = static_cast<size_t>(std::upper_bound(slicePhase.begin(), slicePhase.begin() + static_cast<std::ptrdiff_t>(numSlices), phase)
                                                  - slicePhase.begin()) - 1; // slicePhase[0] == 0, so idx >= 0
+            // Real seconds since a hit started, given how far into it we are in straight (unswung) beats.
+            auto realSince = [&](double sinceBeats) { return (real - swing.forward(beats - sinceBeats)) * secondsPerBeat; };
             auto voice = [&](size_t s, double sincePhase, double amp) {
                 const double end = s + 1 < numSlices ? slicePos[s + 1] : regionStart + regionLen;
                 auto play = [&](double at, double a) {
@@ -120,8 +149,10 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
                     l += static_cast<float>(a * gate) * read(srcL, at);
                     r += static_cast<float>(a * gate) * read(srcR, at);
                 };
-                const double tau = sincePhase * secondsPerPhase;                                  // seconds into the slot
-                const double slot = ((s + 1 < numSlices ? slicePhase[s + 1] : 1.0) - slicePhase[s]) * secondsPerPhase;
+                const double sinceBeats = sincePhase * loopBeats, startBeats = beats - sinceBeats;
+                const double tau = realSince(sinceBeats);                                         // seconds into the slot
+                const double slotBeats = ((s + 1 < numSlices ? slicePhase[s + 1] : 1.0) - slicePhase[s]) * loopBeats;
+                const double slot = (swing.forward(startBeats + slotBeats) - swing.forward(startBeats)) * secondsPerBeat;
                 const double speed = filePerPhase / secondsPerPhase;                              // file samples per second
                 const double fill = (end - slicePos[s]) / std::max(1e-6, slot); // speed that spreads the slice over its slot
                 constexpr double hopSec = 0.03;
@@ -143,20 +174,20 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
                     play(std::min(slicePos[s] + j * hopSec * fill, lastStart) + age * speed, amp * w);
                 }
             };
-            const double since = (phase - slicePhase[idx]) * secondsPerPhase; // seconds since this hit's time
+            const double since = realSince((phase - slicePhase[idx]) * loopBeats); // seconds since this hit's time
             voice(idx, phase - slicePhase[idx], std::min(1.0, since / 0.001));
             if (since < 0.005) {
                 const size_t prev = idx > 0 ? idx - 1 : numSlices - 1; // before the first hit: the loop's last one
                 voice(prev, phase - slicePhase[prev] + (idx == 0 ? 1.0 : 0.0), 1.0 - since / 0.005);
             }
         } else {
-            const double t = beats / beatsPerSample; // output time in samples since host beat 0
+            const double t = real / beatsPerSample; // output time in samples since host beat 0
             const double k = std::floor(t / hop);
             const double speed = srcSpeed * pitchRatio.getNextValue(); // grains read faster/slower = higher/lower
             for (double grain : {k, k - 1.0}) {
                 const double age = t - grain * hop; // 0 .. 2 * hop
                 const double w = std::sin(juce::MathConstants<double>::pi * age / (2.0 * hop));
-                const ChaosRead gc = chaosAt(lp.chaos, loopBeats, grain * hop * beatsPerSample);
+                const ChaosRead gc = chaosAt(lp.chaos, loopBeats, swing.inverse(grain * hop * beatsPerSample));
                 double rel = mapPos(loopPhase(gc.beats)) + dir * gc.dir * age * speed - regionStart;
                 rel -= std::floor(rel / regionLen) * regionLen; // wrap inside the region
                 const double edge = std::min(1.0, std::min(rel, regionLen - rel) / srcFade);
@@ -169,7 +200,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
         r *= g;
         // Grain cloud: crossfade from the loop to the cloud. Chaos dips/dropouts only touch the loop.
         if (const float m = grainMix.getNextValue(); m > 0.0f) {
-            const auto [wl, wr] = cloud.next(sample, p.grains, beats / beatsPerSample, pos, pitchRatio.getCurrentValue());
+            const auto [wl, wr] = cloud.next(sample, p.grains, real / beatsPerSample, pos, pitchRatio.getCurrentValue());
             l = l * (1.0f - m) + wl * level * m;
             r = r * (1.0f - m) + wr * level * m;
         }

@@ -56,11 +56,71 @@ Event eventAt(const ChaosParams& p, int64_t step) {
     return e;
 }
 
+// The hit at or before a moment (host beats), as host beats: back up from `at` to that hit.
+double hitAtOrBefore(const ChaosParams& p, double loopBeats, double at) {
+    const double inLoop = at - std::floor(at / loopBeats) * loopBeats;
+    const auto it = std::upper_bound(p.slices.begin(), p.slices.end(), inLoop);
+    return at - (it == p.slices.begin() ? inLoop + loopBeats - p.slices.back() : inLoop - *(it - 1));
+}
+
+// BEAT mode: each step either plays as recorded, gets swapped for another hit (one step), or rolls
+// (repeats a hit 2 or 4 times per step; 2-step rolls go twice as fast in the second step, like a fill).
+enum class BeatKind { None, Swap, Roll };
+struct BeatEvent {
+    BeatKind kind = BeatKind::None;
+    double start = 0.0, len = 0.0, value = 0.0, source = 0.0;
+};
+
+BeatEvent beatEventAt(const ChaosParams& p, int64_t step) {
+    const double g = p.gridBeats;
+    const uint32_t seed = static_cast<double>(step) * g >= p.switchBeats ? p.nextSeed : p.seed;
+    Rng r{mix(mix((static_cast<uint64_t>(seed) << 32) | p.stream) ^ static_cast<uint64_t>(step) ^ 0xbea7bea7ULL)};
+    const double coin = r.next(), kindPick = r.next(), lenPick = r.next(), value = r.next(), source = r.next();
+    const double c = p.amount;
+    if (coin >= 0.7 * c) return {};
+    const double rollWeight = 1.5 * std::max(0.0, c - 0.2); // rolls join in from ~20% Chaos
+    const bool roll = kindPick * (1.0 + rollWeight) >= 1.0;
+    const double steps = roll && lenPick >= 0.7 ? 2.0 : 1.0;
+    return {roll ? BeatKind::Roll : BeatKind::Swap, static_cast<double>(step) * g, steps * g, value, source};
+}
+
+ChaosRead beatAt(const ChaosParams& p, double loopBeats, double beats) {
+    ChaosRead out{beats};
+    const double g = p.gridBeats;
+    const auto step = static_cast<int64_t>(std::floor(beats / g));
+    BeatEvent current;
+    for (int64_t s = step + 1; s >= step - 1; --s) { // events last 1-2 steps; +1 for the fade before the next
+        const BeatEvent e = beatEventAt(p, s);
+        if (e.kind == BeatKind::None) continue;
+        out.edgeBeats = std::min({out.edgeBeats, std::abs(beats - e.start), std::abs(beats - e.start - e.len)});
+        if (current.kind == BeatKind::None && e.start <= beats && beats < e.start + e.len) current = e;
+    }
+    const auto n = p.slices.size();
+    const double t = beats - current.start;
+    if (current.kind == BeatKind::Swap) { // another hit of the loop, for this one step
+        out.beats = p.slices[std::min(n - 1, static_cast<size_t>(current.value * static_cast<double>(n)))] + t;
+    } else if (current.kind == BeatKind::Roll) {
+        // 2 or 4 repeats per step (1/32 or 1/64 at a 1/16 grid); faster turns into a buzz, not a roll.
+        const double div = current.value < 0.6 ? 2.0 : 4.0;
+        const bool second = t >= g; // the second step of a 2-step roll goes twice as fast
+        const double period = g / (second ? 2.0 * div : div);
+        const double inRep = std::fmod(second ? t - g : t, period);
+        // Roll the hit that belongs here, or (sometimes) another hit of the loop.
+        const double from = current.source < 0.3
+            ? p.slices[std::min(n - 1, static_cast<size_t>(current.source / 0.3 * static_cast<double>(n)))]
+            : hitAtOrBefore(p, loopBeats, current.start);
+        out.beats = from + inRep;
+        out.edgeBeats = std::min({out.edgeBeats, inRep, period - inRep});
+    }
+    return out;
+}
+
 } // namespace
 
 ChaosRead chaosAt(const ChaosParams& p, double loopBeats, double beats) {
     ChaosRead out{beats};
     if (p.amount <= 0.0f || p.gridBeats <= 0.0) return out;
+    if (p.beat && !p.slices.empty()) return beatAt(p, loopBeats, beats);
 
     const double g = p.gridBeats;
     const auto step = static_cast<int64_t>(std::floor(beats / g));
@@ -94,12 +154,8 @@ ChaosRead chaosAt(const ChaosParams& p, double loopBeats, double beats) {
         case Kind::Stutter: { // repeat a slice of 1, 1/2 or 1/4 step
             const double slice = g / (current.value < 0.34 ? 1.0 : current.value < 0.67 ? 2.0 : 4.0);
             const double inSlice = std::fmod(t, slice);
-            double from = current.start;
-            if (!p.slices.empty()) { // back up to the hit at or before where the stutter starts
-                const double inLoop = from - std::floor(from / loopBeats) * loopBeats;
-                const auto it = std::upper_bound(p.slices.begin(), p.slices.end(), inLoop);
-                from -= it == p.slices.begin() ? inLoop + loopBeats - p.slices.back() : inLoop - *(it - 1);
-            }
+            // With slices, back up to the hit at or before where the stutter starts.
+            const double from = p.slices.empty() ? current.start : hitAtOrBefore(p, loopBeats, current.start);
             out.beats = from + inSlice;
             out.edgeBeats = std::min({out.edgeBeats, inSlice, slice - inSlice});
             break;

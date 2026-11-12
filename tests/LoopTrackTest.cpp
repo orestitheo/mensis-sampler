@@ -215,3 +215,50 @@ TEST_CASE("sliced + warp at a slower tempo stretches each slice to fill its slot
     const auto stats = mensis::measure({out.getReadPointer(0), static_cast<size_t>(len)});
     CHECK(stats.maxStep < 0.1f); // a 0.5 * 440 Hz sine steps ~0.029 per sample: no clicks
 }
+
+TEST_CASE("swing: off-steps of a sliced beat come later, crisp, at their own speed") {
+    // Four pings, one per 1/16 at 120 BPM (every 6000 samples), looped over one beat.
+    mensis::Sample s;
+    s.sampleRate = kRate;
+    s.audio.setSize(1, 24000);
+    s.audio.clear();
+    for (int hit = 0; hit < 4; ++hit)
+        for (int i = 0; i < 1200; ++i)
+            s.audio.setSample(0, hit * 6000 + i, std::sin(2.0f * juce::MathConstants<float>::pi * 1000.0f * i / 48000.0f)
+                                                  * std::exp(-i / 200.0f));
+    s.slices = {0, 6000, 12000, 18000};
+
+    mensis::LoopParams p;
+    p.levelDb = 0.0f;
+    p.warp = true;
+    p.slice = true;
+    p.bars = 0.25; // 1 beat
+    p.swing = 1.0 / 3.0; // 66.7%: triplet shuffle
+    mensis::LoopTrack track;
+    track.prepare(kRate);
+    const int len = 48000;
+    juce::AudioBuffer<float> out(2, len);
+    out.clear();
+    for (int pos = 0; pos < len; pos += 512)
+        track.render(s, p, pos * kBpm / (60.0 * kRate), kBpm, out, pos, std::min(512, len - pos));
+
+    auto firstLoudAfter = [&](int from) {
+        for (int i = from; i < from + 6000; ++i) if (std::abs(out.getSample(0, i)) > 0.5f) return i;
+        return -1;
+    };
+    // Steps at 0, 6000, 12000, 18000 (one beat = 24000). Even steps stay; odd ones move 1/3 step = 2000 later.
+    for (int beat = 0; beat < 2; ++beat) {
+        const int base = beat * 24000;
+        CHECK(std::abs(firstLoudAfter(base + 10) - (base + 10)) < 60);               // hit 0 on time (allow attack)
+        CHECK(std::abs(firstLoudAfter(base + 6000 - 100) - (base + 8000)) < 60);     // hit 1 swung: +2000
+        CHECK(std::abs(firstLoudAfter(base + 12000 - 100) - (base + 12000)) < 60);   // hit 2 on time
+        CHECK(std::abs(firstLoudAfter(base + 18000 - 100) - (base + 20000)) < 60);   // hit 3 swung
+    }
+    const auto stats = mensis::measure({out.getReadPointer(0), static_cast<size_t>(len)});
+    CHECK(stats.maxStep < 0.2f); // a 1 kHz ping steps ~0.13: no clicks
+
+    // Same pings at their own pitch: count zero crossings in the swung hit 1 (should still be ~1 kHz).
+    int crossings = 0;
+    for (int i = 8000; i < 8960; ++i) crossings += (out.getSample(0, i - 1) < 0.0f) != (out.getSample(0, i) < 0.0f);
+    CHECK(std::abs(crossings / 2 - 20) <= 2); // 960 samples = 20 ms of 1 kHz
+}

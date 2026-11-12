@@ -151,3 +151,46 @@ TEST_CASE("with slices, jumps and stutters start on a hit") {
     }
     CHECK(checked > 100);
 }
+
+TEST_CASE("BEAT mode: every step starts on a hit, exactly on the grid; no reverse or silence") {
+    const std::array<double, 3> hits{0.1, 1.3, 2.7}; // off the grid on purpose
+    mensis::ChaosParams p;
+    p.slices = hits;
+    p.beat = true;
+    auto wrap = [](double x) { return x - std::floor(x / kLoopBeats) * kLoopBeats; };
+    for (float amount : {0.3f, 1.0f}) {
+        p.amount = amount;
+        int changed = 0, rollRepeats = 0;
+        for (uint32_t seed = 0; seed < 8; ++seed) {
+            p.seed = p.nextSeed = seed;
+            for (int sub = 0; sub < 256 * 8; ++sub) { // every 1/8 of a step: catches the starts of roll repeats too
+                const double b = sub * p.gridBeats / 8.0 + 1e-6;
+                const auto r = mensis::chaosAt(p, kLoopBeats, b);
+                REQUIRE(r.gain == 1.0f);
+                REQUIRE(r.dir == 1.0);
+                if (sub % 8 == 0 && r.beats != b) ++changed;
+                // A read that just restarted (step start or a roll repeat) is exactly on a hit.
+                const double x = wrap(r.beats - 1e-6);
+                bool onHit = false;
+                for (double h : hits) onHit = onHit || std::abs(x - h) < 1e-4;
+                if (onHit && sub % 8 != 0) ++rollRepeats;
+                if (sub % 8 == 0 && r.beats != b) CHECK(onHit);
+            }
+        }
+        CHECK(changed > 50);
+        if (amount > 0.5f) CHECK(rollRepeats > 50); // rolls retrigger inside steps
+    }
+}
+
+TEST_CASE("BEAT mode: more chaos = more changed steps, same seed = same beat") {
+    const std::array<double, 4> hits{0.0, 1.0, 2.0, 3.0};
+    mensis::ChaosParams p;
+    p.slices = hits;
+    p.beat = true;
+    p.seed = p.nextSeed = 11;
+    p.amount = 0.2f;
+    const int low = changedSteps(p);
+    p.amount = 0.9f;
+    CHECK(changedSteps(p) > 2 * low);
+    CHECK(pattern(p) == pattern(p));
+}

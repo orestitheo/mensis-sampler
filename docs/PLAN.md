@@ -125,3 +125,19 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
   `space.freeze`. UI: SPACE page with the 4 SENDs and the Space knobs.
 - Tracks render into a preallocated scratch buffer so their send can be taken; blocks bigger than
   prepared are processed in chunks.
+
+## BEAT mode (Chaos on sliced tracks)
+- Per track BEAT button (`t1.beat` ..t4), needs SLICE. Chaos then works like a drummer remixing the loop,
+  always exactly on the grid (FEEL ignored): no jumps/reverse/dropouts. Per step, a seeded coin
+  (70% x Chaos) picks an event:
+  - Swap: another hit of the loop plays for exactly one step.
+  - Roll (from ~20% Chaos): a hit repeats 2 or 4 times per step; 2-step rolls double speed in step two.
+    Usually the hit that belongs there, sometimes another one.
+- Same seed = same beat; more Chaos only adds events.
+
+## Swing
+- Global SWING 50% (straight) .. 75%, on the GRID steps: in each pair of steps the first is stretched by
+  (1+s) and the second squeezed by (1-s), s = (swing-50)/50. 66% = triplet shuffle.
+- Applied as a time warp before everything else on a track (loop position, Chaos, BEAT), Warp only (in
+  tape mode it would wobble the pitch). Beats-style hits use real elapsed time, so swung hits start late
+  but play at their own speed and pitch. The grain cloud stays on real time.

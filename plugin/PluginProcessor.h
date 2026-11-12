@@ -96,6 +96,7 @@ private:
         std::atomic<float>* colTilt;
         std::atomic<float>* colOut;
         std::atomic<float>* colMix;
+        std::atomic<float>* beat;
     };
     std::array<TrackParams, kNumTracks> trackParams{};
     std::array<mensis::LoopTrack, kNumTracks> tracks;
@@ -119,6 +120,7 @@ private:
     std::atomic<float>* chaosFeel = nullptr;
     std::atomic<float>* seedParam = nullptr;
     std::atomic<float>* masterDb = nullptr;
+    std::atomic<float>* swingParam = nullptr;
     std::array<std::atomic<float>*, kNumTracks> sendParams{};
     std::atomic<float>* spaceTime = nullptr;
     std::atomic<float>* spaceFeedback = nullptr;

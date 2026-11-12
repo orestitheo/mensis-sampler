@@ -506,8 +506,9 @@ public:
             knobs[i].attach(*p.params.getParameter(id(knobIds[i].first)), knobIds[i].second);
             addAndMakeVisible(knobs[i]);
         }
-        const std::array<std::pair<const char*, const char*>, 3> toggleIds{
-            {{"reverse", "REV"}, {"warp", "WARP"}, {"slice", "SLICE"}}};
+        const std::array<std::pair<const char*, const char*>, 4> toggleIds{
+            {{"reverse", "REV"}, {"warp", "WARP"}, {"slice", "SLICE"}, {"beat", "BEAT"}}};
+        toggles[3].button.setTooltip("BEAT: Chaos shuffles hits and adds rolls, always on the grid (needs SLICE)");
         for (size_t i = 0; i < toggles.size(); ++i) attachToggle(toggles[i], toggleIds[i].first, toggleIds[i].second);
 
         const std::array<std::pair<const char*, const char*>, 7> grainIds{{{"grain.mix", "MIX"}, {"grain.size", "SIZE"},
@@ -550,6 +551,7 @@ public:
         const auto file = proc.getSampleFile(track);
         name.setText(file == juce::File{} ? "empty" : file.getFileNameWithoutExtension(), juce::dontSendNotification);
         knobs[3].setEnabled(toggles[1].button.getToggleState()); // Pitch only works with Warp on
+        toggles[3].button.setEnabled(toggles[2].button.getToggleState()); // BEAT needs SLICE
         remove.setEnabled(file != juce::File{});
         wave.setAlpha(play.getToggleState() ? 1.0f : 0.3f); // muted tracks fade back
         number.setColour(juce::Label::textColourId, play.getToggleState() ? MensisLook::fg : MensisLook::mid);
@@ -585,10 +587,10 @@ public:
         }
         resKnobs[7].setBounds(right.withWidth(60)); // 8th knob where the toggles are on the other pages
         colorKnobs[7].setBounds(right.withWidth(60));
-        right = right.withSizeKeepingCentre(right.getWidth() - 8, 74);
-        freeze.button.setBounds(right.withHeight(22).reduced(4, 0));
+        right = right.withSizeKeepingCentre(right.getWidth() - 8, 92);
+        freeze.button.setBounds(right.withHeight(20).reduced(4, 0));
         for (auto& t : toggles) {
-            t.button.setBounds(right.removeFromTop(22).reduced(4, 0));
+            t.button.setBounds(right.removeFromTop(20).reduced(4, 0));
             right.removeFromTop(4);
         }
     }
@@ -609,7 +611,7 @@ private:
     juce::TextButton load, remove;
     WaveformView wave;
     std::array<Knob, 7> knobs;
-    std::array<Toggle, 3> toggles;
+    std::array<Toggle, 4> toggles;
     std::array<Knob, 7> grainKnobs;
     std::array<Knob, 8> resKnobs, colorKnobs;
     Toggle freeze;
@@ -687,8 +689,8 @@ public:
             strips[t]->onLoad = [this, t] { chooseFile(t); };
             addAndMakeVisible(*strips[t]);
         }
-        const std::array<std::pair<const char*, const char*>, 4> globalIds{
-            {{"chaos", "CHAOS"}, {"chaos.grid", "GRID"}, {"chaos.feel", "FEEL"}, {"seed", "SEED"}}};
+        const std::array<std::pair<const char*, const char*>, 5> globalIds{
+            {{"chaos", "CHAOS"}, {"chaos.grid", "GRID"}, {"chaos.feel", "FEEL"}, {"swing", "SWING"}, {"seed", "SEED"}}};
         for (size_t i = 0; i < globalKnobs.size(); ++i) {
             globalKnobs[i].attach(*p.params.getParameter(globalIds[i].first), globalIds[i].second);
             addAndMakeVisible(globalKnobs[i]);
@@ -743,11 +745,11 @@ public:
         auto head = getLocalBounds().reduced(20, 0).removeFromTop(kHeader).reduced(0, 12);
         volume.setBounds(head.removeFromRight(70)); // master, far right
         head.removeFromRight(20);
-        reroll.setBounds(head.removeFromRight(80).withSizeKeepingCentre(80, 24));
+        reroll.setBounds(head.removeFromRight(72).withSizeKeepingCentre(72, 24));
         head.removeFromRight(8);
         for (size_t i = globalKnobs.size(); i-- > 0;) globalKnobs[i].setBounds(head.removeFromRight(i == 0 ? 76 : 60));
-        auto tabs = head.withTrimmedLeft(160).removeFromLeft(5 * 80).withSizeKeepingCentre(5 * 80, 24);
-        for (auto& b : pages) b.setBounds(tabs.removeFromLeft(80).withTrimmedRight(4));
+        auto tabs = head.withTrimmedLeft(140).removeFromLeft(5 * 74).withSizeKeepingCentre(5 * 74, 24);
+        for (auto& b : pages) b.setBounds(tabs.removeFromLeft(74).withTrimmedRight(4));
 
         auto area = getLocalBounds().reduced(20, 0).withTrimmedTop(kHeader).withTrimmedBottom(12);
         const int h = area.getHeight() / static_cast<int>(MensisProcessor::kNumTracks);
@@ -809,7 +811,7 @@ private:
     MensisLook look; // declared first so it outlives every child that uses it
     MensisProcessor& proc;
     std::array<std::unique_ptr<TrackStrip>, MensisProcessor::kNumTracks> strips;
-    std::array<Knob, 4> globalKnobs;
+    std::array<Knob, 5> globalKnobs;
     Knob volume;
     juce::TextButton reroll;
     std::array<juce::TextButton, 5> pages; // LOOP / GRAINS / RESONATOR / COLOR / SPACE

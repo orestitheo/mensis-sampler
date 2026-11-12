@@ -148,6 +148,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                    juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f, 2.5f), 0.0f,
                    text([](float v, int) { return v <= -60.0f ? juce::String("-inf") : juce::String(v, 1) + " dB"; })),
                std::make_unique<juce::AudioParameterBool>(juce::ParameterID{"space.freeze", 1}, "Space Freeze", false));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"swing", 1}, "Swing",
+                   juce::NormalisableRange<float>(50.0f, 75.0f), 50.0f,
+                   text([](float v, int) { return juce::String(juce::roundToInt(v)) + "%"; })));
+    for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) // BEAT mode Chaos for sliced tracks
+        layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{paramId(t, "beat"), 1},
+                                                              "T" + juce::String(t + 1) + " Beat", false));
     return layout;
 }
 
@@ -164,7 +170,7 @@ MensisProcessor::MensisProcessor()
                           raw("res.mix"), raw("res.root"), raw("res.chord"), raw("res.decay"), raw("res.color"),
                           raw("flt.cutoff"), raw("flt.reso"), raw("flt.morph"),
                           raw("col.drive"), raw("col.char"), raw("col.bits"), raw("col.rate"), raw("col.squash"),
-                          raw("col.tilt"), raw("col.out"), raw("col.mix")};
+                          raw("col.tilt"), raw("col.out"), raw("col.mix"), raw("beat")};
         playPos[t].store(-1.0f);
         grainAnchor[t].store(-1.0f);
     }
@@ -173,6 +179,7 @@ MensisProcessor::MensisProcessor()
     chaosFeel = params.getRawParameterValue("chaos.feel");
     seedParam = params.getRawParameterValue("seed");
     masterDb = params.getRawParameterValue("master");
+    swingParam = params.getRawParameterValue("swing");
     for (size_t t = 0; t < kNumTracks; ++t) sendParams[t] = params.getRawParameterValue(paramId(t, "send"));
     spaceTime = params.getRawParameterValue("space.time");
     spaceFeedback = params.getRawParameterValue("space.feedback");
@@ -266,6 +273,8 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         lp.chaos.stream = static_cast<uint32_t>(t);
         lp.pitch = tp.pitch->load();
         lp.slice = tp.slice->load() > 0.5f;
+        lp.beat = tp.beat->load() > 0.5f;
+        lp.swing = (swingParam->load() - 50.0f) / 50.0f; // 50% = straight, 75% = 0.5
         lp.on = tp.on->load() > 0.5f;
         lp.res = {tp.resMix->load(), tp.resRoot->load(), static_cast<int>(tp.resChord->load()), tp.resDecay->load(),
                   tp.resColor->load(), midiNotes, numMidiNotes};

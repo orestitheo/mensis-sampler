@@ -13,6 +13,7 @@ struct ChaosParams {
     uint32_t nextSeed = 0;    // used for steps from switchBeats on (Re-roll lands on the next bar)
     double switchBeats = -1e300;
     std::span<const double> slices; // hit positions in loop beats (0..loopBeats), ascending; empty = no snapping
+    bool beat = false; // BEAT mode (needs slices): every step plays a hit; Chaos shuffles hits and adds rolls
 };
 
 // What Chaos does to the read position at one moment.

@@ -10,7 +10,7 @@ static int usage() {
     std::cerr << "usage: mensis-cli loop <sample> --out file.wav [--bpm 120] [--bars 1] [--seconds 8]\n"
                  "                  [--start 0] [--length 1] [--reverse 0|1] [--level -6] [--pan 0] [--warp 1] [--rate 48000]\n"
                  "       mensis-cli slices <sample>   (prints where the hits are, in seconds)\n"
-                 "                  [--chaos 0] [--seed 1] [--grid 0.25] [--loose 0] [--pitch 0] [--slice 0|1]\n"
+                 "                  [--chaos 0] [--seed 1] [--grid 0.25] [--loose 0] [--pitch 0] [--slice 0|1] [--beat 0|1] [--swing 50]\n"
                  "                  [--grain-mix 0] [--grain-size 80] [--grain-density 20] [--grain-spray 0.2]\n"
                  "                  [--grain-detune 0] [--grain-reverse 0] [--grain-width 0.5]\n"
                  "                  [--res-mix 0] [--res-root 48] [--res-chord 0] [--res-decay 1] [--res-color 0]\n"
@@ -48,7 +48,7 @@ int main(int argc, char* argv[]) {
     if (argc < 3 || std::string(argv[1]) != "loop") return usage();
 
     std::map<std::string, std::string> opt{{"--bpm", "120"}, {"--bars", "1"}, {"--seconds", "8"}, {"--start", "0"},
-        {"--length", "1"}, {"--reverse", "0"}, {"--level", "-6"}, {"--pan", "0"}, {"--warp", "1"}, {"--chaos", "0"}, {"--seed", "1"}, {"--grid", "0.25"}, {"--loose", "0"}, {"--pitch", "0"}, {"--slice", "0"}, {"--grain-mix", "0"}, {"--grain-size", "80"}, {"--grain-density", "20"},
+        {"--length", "1"}, {"--reverse", "0"}, {"--level", "-6"}, {"--pan", "0"}, {"--warp", "1"}, {"--chaos", "0"}, {"--seed", "1"}, {"--grid", "0.25"}, {"--loose", "0"}, {"--pitch", "0"}, {"--slice", "0"}, {"--beat", "0"}, {"--swing", "50"}, {"--grain-mix", "0"}, {"--grain-size", "80"}, {"--grain-density", "20"},
         {"--grain-spray", "0.2"}, {"--grain-detune", "0"}, {"--grain-reverse", "0"}, {"--grain-width", "0.5"},
         {"--res-mix", "0"}, {"--res-root", "48"}, {"--res-chord", "0"}, {"--res-decay", "1"}, {"--res-color", "0"},
         {"--cutoff", "20000"}, {"--reso", "0"}, {"--morph", "0"},
@@ -78,6 +78,8 @@ int main(int argc, char* argv[]) {
     params.chaos.seed = params.chaos.nextSeed = static_cast<uint32_t>(num("--seed"));
     params.pitch = static_cast<float>(num("--pitch"));
     params.slice = num("--slice") != 0.0;
+    params.beat = num("--beat") != 0.0;
+    params.swing = (num("--swing") - 50.0) / 50.0;
     params.grains = {static_cast<float>(num("--grain-mix")), static_cast<float>(num("--grain-size")),
                      static_cast<float>(num("--grain-density")), static_cast<float>(num("--grain-spray")),
                      static_cast<float>(num("--grain-detune")), static_cast<float>(num("--grain-reverse")),

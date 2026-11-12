@@ -18,6 +18,8 @@ struct LoopParams {
     ChaosParams chaos;     // amount 0 = plays clean
     float pitch = 0.0f;    // semitones; Warp only (in tape mode the speed sets the pitch)
     bool slice = false;    // Chaos snaps to the sample's hits; with Warp, hits play Beats-style
+    bool beat = false;     // with slice: BEAT mode Chaos (hits shuffled + rolls, always on the grid)
+    double swing = 0.0;    // 0 = straight .. 0.5 (= 75%): every 2nd grid step comes later. Warp only.
     GrainParams grains;    // mix 0 = off
     bool on = true;        // off = fades out over 50 ms (track mute)
     ResonatorParams res;   // mix 0 = off
