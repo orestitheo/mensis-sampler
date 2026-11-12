@@ -88,7 +88,12 @@ ChaosRead chaosAt(const ChaosParams& p, double loopBeats, double beats) {
     const double t = beats - current.start; // time since the event started
     switch (current.kind) {
         case Kind::None: break;
-        case Kind::Jump: { // play on from another step of the loop
+        case Kind::Jump: { // play on from another step of the loop, or from a hit
+            if (!p.slices.empty()) {
+                const auto i = std::min(p.slices.size() - 1, static_cast<size_t>(current.value * static_cast<double>(p.slices.size())));
+                out.beats = p.slices[i] + t;
+                break;
+            }
             const double loopSteps = std::max(1.0, std::floor(loopBeats / g));
             out.beats = beats + std::floor(current.value * loopSteps) * g;
             break;
@@ -100,7 +105,13 @@ ChaosRead chaosAt(const ChaosParams& p, double loopBeats, double beats) {
         case Kind::Stutter: { // repeat a slice of 1, 1/2 or 1/4 step
             const double slice = g / (current.value < 0.34 ? 1.0 : current.value < 0.67 ? 2.0 : 4.0);
             const double inSlice = std::fmod(t, slice);
-            out.beats = current.start + inSlice;
+            double from = current.start;
+            if (!p.slices.empty()) { // back up to the hit at or before where the stutter starts
+                const double inLoop = from - std::floor(from / loopBeats) * loopBeats;
+                const auto it = std::upper_bound(p.slices.begin(), p.slices.end(), inLoop);
+                from -= it == p.slices.begin() ? inLoop + loopBeats - p.slices.back() : inLoop - *(it - 1);
+            }
+            out.beats = from + inSlice;
             out.edgeBeats = std::min({out.edgeBeats, inSlice, slice - inSlice});
             break;
         }

@@ -101,6 +101,18 @@ public:
             g.setColour(fx >= st && fx <= en ? MensisLook::fg : MensisLook::dim); // only the loop region is lit
             g.drawVerticalLine(static_cast<int>(x), mid - peaks[x] * half, mid + peaks[x] * half);
         }
+        if (value("slice") > 0.5f) { // hit markers inside the loop region: thin line + a tick at the bottom
+            const float n = static_cast<float>(std::max(1, sample->audio.getNumSamples() - 1));
+            for (int onset : sample->slices) {
+                const float fx = static_cast<float>(onset) / n;
+                if (fx <= st || fx >= en) continue; // only the region gets sliced
+                const float x = fx * w;
+                g.setColour(MensisLook::fg.withAlpha(0.3f));
+                g.drawVerticalLine(static_cast<int>(x), 0.0f, b.getHeight());
+                g.setColour(MensisLook::fg);
+                g.fillRect(x - 0.5f, b.getHeight() - 6.0f, 2.0f, 6.0f);
+            }
+        }
         for (const auto [edge, x] : {std::pair{Grab::Start, st * w}, std::pair{Grab::End, en * w - 2.0f}}) {
             const bool active = grab == edge || (grab == Grab::None && hover == edge);
             g.setColour(active ? MensisLook::fg : MensisLook::fg.withAlpha(0.7f));
@@ -261,7 +273,8 @@ public:
             knobs[i].attach(*p.params.getParameter(id(knobIds[i].first)), knobIds[i].second);
             addAndMakeVisible(knobs[i]);
         }
-        const std::array<std::pair<const char*, const char*>, 2> toggleIds{{{"reverse", "REV"}, {"warp", "WARP"}}};
+        const std::array<std::pair<const char*, const char*>, 3> toggleIds{
+            {{"reverse", "REV"}, {"warp", "WARP"}, {"slice", "SLICE"}}};
         for (size_t i = 0; i < toggles.size(); ++i) {
             toggles[i].button.setButtonText(toggleIds[i].second);
             toggles[i].button.setClickingTogglesState(true);
@@ -294,7 +307,7 @@ public:
         auto right = area.removeFromRight(9 * 60);
         wave.setBounds(area.withTrimmedRight(16));
         for (auto& k : knobs) k.setBounds(right.removeFromLeft(60));
-        right = right.withSizeKeepingCentre(right.getWidth() - 8, 48);
+        right = right.withSizeKeepingCentre(right.getWidth() - 8, 74);
         for (auto& t : toggles) {
             t.button.setBounds(right.removeFromTop(22).reduced(4, 0));
             right.removeFromTop(4);
@@ -311,7 +324,7 @@ private:
     juce::TextButton load;
     WaveformView wave;
     std::array<Knob, 7> knobs;
-    std::array<Toggle, 2> toggles;
+    std::array<Toggle, 3> toggles;
 };
 
 class MensisEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget,

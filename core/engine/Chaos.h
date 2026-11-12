@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <span>
 
 namespace mensis {
 
@@ -11,6 +12,7 @@ struct ChaosParams {
     uint32_t seed = 0;        // used for steps before switchBeats
     uint32_t nextSeed = 0;    // used for steps from switchBeats on (Re-roll lands on the next bar)
     double switchBeats = -1e300;
+    std::span<const double> slices; // hit positions in loop beats (0..loopBeats), ascending; empty = no snapping
 };
 
 // What Chaos does to the read position at one moment.
@@ -21,6 +23,7 @@ struct ChaosRead {
     double edgeBeats = 1e9; // distance to the nearest jump in the output, so the caller can fade around it
 };
 
+// With slices, Jump lands on a hit and Stutter repeats from the hit before it.
 // Pure function of its inputs: same params + same beats = same answer. Real-time safe.
 ChaosRead chaosAt(const ChaosParams& p, double loopBeats, double beats);
 

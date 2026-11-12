@@ -47,3 +47,16 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
 - SEED is a param (saved with the set). RE-ROLL picks a new seed; it takes over at the next bar.
 - New param IDs: `chaos`, `chaos.grid`, `chaos.feel`, `seed`, `t1.chaos` (…t4). Track params first
   (8 per track = one Push bank each), global Chaos params in bank 5.
+
+## Section 3 notes: Slicing
+- On load (message thread) find the hits: energy rise per 5.8 ms frame on a treble-boosted mono mix,
+  adaptive threshold, 50 ms minimum gap, then step back to where the hit really starts. Stored in Sample.
+- Drum-like guess (many sharp hits that fall back to quiet) turns the track's SLICE on at load; the SLICE
+  button overrides. Param `t1.slice` (…t4).
+- SLICE on:
+  - Chaos Jump lands on a hit; Stutter repeats from the hit before it. Event timing stays on the grid.
+  - With Warp: Beats-style playback. Each hit restarts at its own speed exactly when its time comes;
+    the previous one fades out in 5 ms, and a hit's tail is gated before it runs into the next hit.
+    Pitch still works. Reverse falls back to grain warp.
+  - Fades around Chaos jumps are 1 ms instead of 5 ms so hits keep their attack.
+- Waveform shows the slice markers when SLICE is on.

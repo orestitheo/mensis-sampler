@@ -14,6 +14,7 @@ struct LoopParams {
     bool warp = false;     // true: keep the original pitch, stretch time with overlapping grains
     ChaosParams chaos;     // amount 0 = plays clean
     float pitch = 0.0f;    // semitones; Warp only (in tape mode the speed sets the pitch)
+    bool slice = false;    // Chaos snaps to the sample's hits; with Warp, hits play Beats-style
 };
 
 // One looping track. The play position comes straight from the host's beat position,
@@ -35,6 +36,12 @@ private:
     float lastPos = 0.0f;
     bool primed = false; // first render jumps straight to the param values instead of gliding from 0
     juce::SmoothedValue<float> start, length, gain, pan, pitchRatio;
+
+    // The hits inside the loop region, rebuilt each block (fixed size: no allocation on the audio thread).
+    // shortcut: max 512 hits per loop region; later ones are ignored
+    static constexpr size_t kMaxSlices = 512;
+    std::array<double, kMaxSlices> slicePhase{}, slicePos{}, sliceBeats{}; // 0..1 of the loop, file sample, loop beats
+    size_t numSlices = 0;
 };
 
 } // namespace mensis

@@ -124,3 +124,30 @@ TEST_CASE("dropouts are short gaps on any grid, and never chain") {
     CHECK(longest > 0.0);
     CHECK(longest <= 0.5 + 1.0 / 64.0); // 1/8 note at most
 }
+
+TEST_CASE("with slices, jumps and stutters start on a hit") {
+    // Hits off the 1/16 grid, so a grid-based jump could never land on one by luck.
+    const std::array<double, 3> hits{0.1, 1.3, 2.7};
+    mensis::ChaosParams p;
+    p.amount = 0.5f; // mostly jumps and stutters
+    p.slices = hits;
+    int checked = 0;
+    for (uint32_t seed = 0; seed < 10; ++seed) {
+        p.seed = p.nextSeed = seed;
+        for (int step = 0; step < 256; ++step) {
+            const double b = step * p.gridBeats + 1e-6;
+            const auto r = mensis::chaosAt(p, kLoopBeats, b);
+            if (r.beats == b || r.dir < 0.0 || r.gain == 0.0f) continue; // untouched, reverse or dropout
+            // Up to 4 steps into an event, the read is a hit + whole steps (+ the 1e-6 nudge).
+            bool onHit = false;
+            for (int k = 0; k <= 4 && !onHit; ++k) {
+                double x = r.beats - k * p.gridBeats - 1e-6;
+                x -= std::floor(x / kLoopBeats) * kLoopBeats;
+                for (double h : hits) onHit = onHit || std::abs(x - h) < 1e-4;
+            }
+            CHECK(onHit);
+            ++checked;
+        }
+    }
+    CHECK(checked > 100);
+}

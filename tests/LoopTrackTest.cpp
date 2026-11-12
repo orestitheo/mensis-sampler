@@ -120,3 +120,42 @@ TEST_CASE("warp keeps the pitch when the loop is stretched") {
     CHECK_THAT(crossingsPerSecond(true, 12.0f), WithinAbs(880.0, 50.0));
     CHECK_THAT(crossingsPerSecond(true, -12.0f), WithinAbs(220.0, 15.0));
 }
+
+TEST_CASE("sliced + warp plays hits Beats-style: on time and crisp at another tempo") {
+    // 1 bar at 120 BPM (2 s): four short 1 kHz pings, one per beat.
+    mensis::Sample s;
+    s.sampleRate = kRate;
+    s.audio.setSize(1, static_cast<int>(2.0 * kRate));
+    s.audio.clear();
+    for (int hit = 0; hit < 4; ++hit)
+        for (int i = 0; i < 4800; ++i)
+            s.audio.setSample(0, hit * 24000 + i, std::sin(2.0f * juce::MathConstants<float>::pi * 1000.0f * i / 48000.0f)
+                                                   * std::exp(-i / 600.0f));
+    s.slices = {0, 24000, 48000, 72000};
+
+    for (double bpm : {90.0, 150.0}) { // slower and faster than the sample's own 120
+        mensis::LoopParams p;
+        p.levelDb = 0.0f;
+        p.warp = true;
+        p.slice = true;
+        mensis::LoopTrack track;
+        track.prepare(kRate);
+        const double beatSec = 60.0 / bpm;
+        const int len = static_cast<int>(4.0 * beatSec * kRate);
+        juce::AudioBuffer<float> out(2, len);
+        out.clear();
+        for (int pos = 0; pos < len; pos += 512)
+            track.render(s, p, pos * bpm / (60.0 * kRate), bpm, out, pos, std::min(512, len - pos));
+
+        for (int beat = 1; beat < 4; ++beat) {
+            const int at = static_cast<int>(beat * beatSec * kRate);
+            float hitPeak = 0.0f, before = 0.0f;
+            for (int i = at; i < at + 96; ++i) hitPeak = std::max(hitPeak, std::abs(out.getSample(0, i)));        // first 2 ms
+            for (int i = at - 480; i < at - 96; ++i) before = std::max(before, std::abs(out.getSample(0, i)));    // 10..2 ms before
+            CHECK(hitPeak > 0.9f);   // the attack is there right on the beat, at full level
+            CHECK(before < 0.05f);   // and nothing smeared in before it
+        }
+        const auto stats = mensis::measure({out.getReadPointer(0), static_cast<size_t>(len)});
+        CHECK(stats.maxStep < 0.2f); // a 1 kHz ping steps up to ~0.13 per sample: no clicks
+    }
+}

@@ -29,6 +29,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                        })),
                    std::make_unique<juce::AudioParameterBool>(id("reverse"), label("Reverse"), false),
                    std::make_unique<juce::AudioParameterBool>(id("warp"), label("Warp"), true),
+                   std::make_unique<juce::AudioParameterBool>(id("slice"), label("Slice"), false),
                    std::make_unique<juce::AudioParameterFloat>(id("level"), label("Level"),
                        juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f), -6.0f),
                    std::make_unique<juce::AudioParameterFloat>(id("pan"), label("Pan"), -1.0f, 1.0f, 0.0f),
@@ -49,7 +50,7 @@ MensisProcessor::MensisProcessor()
       params(*this, nullptr, "MensisSampler", makeLayout()) {
     for (size_t t = 0; t < kNumTracks; ++t) {
         auto raw = [&](const char* name) { return params.getRawParameterValue(paramId(t, name)); };
-        trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan"), raw("warp"), raw("chaos"), raw("pitch")};
+        trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan"), raw("warp"), raw("chaos"), raw("pitch"), raw("slice")};
         playPos[t].store(-1.0f);
     }
     chaosAmount = params.getRawParameterValue("chaos");
@@ -110,6 +111,7 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             lp.chaos.looseness = feel == 0 ? 0.0f : feel == 1 ? lp.chaos.amount : 1.0f; // Loose: drifts more as Chaos rises
             lp.chaos.stream = static_cast<uint32_t>(t);
             lp.pitch = tp.pitch->load();
+            lp.slice = tp.slice->load() > 0.5f;
             tracks[t].render(*sample, lp, ppq, bpm, buffer, 0, numSamples);
             playPos[t].store(tracks[t].position(), std::memory_order_relaxed);
         }
@@ -120,11 +122,13 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     blocksDone.fetch_add(1, std::memory_order_release);
 }
 
-bool MensisProcessor::loadSample(size_t track, const juce::File& file, bool guessBars) {
+bool MensisProcessor::loadSample(size_t track, const juce::File& file, bool fresh) {
     auto sample = mensis::loadSample(file);
     if (sample == nullptr) return false;
 
-    if (guessBars) {
+    if (fresh) {
+        auto* slice = params.getParameter(paramId(track, "slice"));
+        slice->setValueNotifyingHost(sample->drumLike ? 1.0f : 0.0f);
         const double bars = sample->lengthSec() * lastBpm.load() / 240.0; // 4 beats per bar
         size_t best = 0;
         for (size_t i = 1; i < kBarValues.size(); ++i)

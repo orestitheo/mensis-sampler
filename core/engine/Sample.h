@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <memory>
+#include <vector>
 
 namespace mensis {
 
@@ -9,6 +10,8 @@ struct Sample {
     juce::AudioBuffer<float> audio; // 1 (mono) or 2 (stereo) channels
     double sampleRate = 44100.0;
     juce::File file;
+    std::vector<int> slices; // where the hits start (sample index), found at load
+    bool drumLike = false;   // guess: turn SLICE on for this sample
 
     double lengthSec() const { return audio.getNumSamples() / sampleRate; }
 };

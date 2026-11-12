@@ -12,8 +12,9 @@ public:
 
     MensisProcessor();
 
-    // Message thread only. guessBars: pick the bar count that fits the sample at the current tempo.
-    bool loadSample(size_t track, const juce::File& file, bool guessBars);
+    // Message thread only. fresh: a new load by the user (not a saved set): pick the bar count that fits the
+    // sample at the current tempo, and turn SLICE on if it sounds like drums.
+    bool loadSample(size_t track, const juce::File& file, bool fresh);
     juce::File getSampleFile(size_t track) const; // message thread only
     const mensis::Sample* getSample(size_t track) const { return ownedSamples[track].get(); } // message thread only
     // 0..1 where the track is playing in its sample, -1 when stopped or empty. Any thread.
@@ -56,6 +57,7 @@ private:
         std::atomic<float>* warp;
         std::atomic<float>* chaos;
         std::atomic<float>* pitch;
+        std::atomic<float>* slice;
     };
     std::array<TrackParams, kNumTracks> trackParams{};
     std::array<mensis::LoopTrack, kNumTracks> tracks;

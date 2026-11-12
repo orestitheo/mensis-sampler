@@ -1,4 +1,5 @@
 #include "Sample.h"
+#include "Slices.h"
 
 namespace mensis {
 
@@ -19,6 +20,9 @@ std::unique_ptr<Sample> loadSample(const juce::File& file) {
     if (!reader->read(&sample->audio, 0, numSamples, 0, true, channels > 1)) return nullptr;
     sample->sampleRate = reader->sampleRate;
     sample->file = file;
+    auto slices = findSlices(sample->audio, sample->sampleRate);
+    sample->slices = std::move(slices.onsets);
+    sample->drumLike = slices.drumLike;
     return sample;
 }
 

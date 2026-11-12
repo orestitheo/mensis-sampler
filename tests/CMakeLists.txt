@@ -1,5 +1,5 @@
 juce_add_console_app(mensis_tests)
-target_sources(mensis_tests PRIVATE RenderStatsTest.cpp LoopTrackTest.cpp ChaosTest.cpp)
+target_sources(mensis_tests PRIVATE RenderStatsTest.cpp LoopTrackTest.cpp ChaosTest.cpp SlicesTest.cpp)
 target_link_libraries(mensis_tests PRIVATE mensis_core Catch2::Catch2WithMain)
 include(${Catch2_SOURCE_DIR}/extras/Catch.cmake)
 catch_discover_tests(mensis_tests)
