@@ -18,7 +18,6 @@ struct ChaosRead {
     double beats;           // where to read, in host beats; the loop maps this to a spot in the sample
     double dir = 1.0;       // -1 while a Reverse event plays
     float gain = 1.0f;      // 0 during a Dropout
-    bool tape = false;      // Tape stop: read tape-style even in Warp, so the pitch falls with the speed
     double edgeBeats = 1e9; // distance to the nearest jump in the output, so the caller can fade around it
 };
 

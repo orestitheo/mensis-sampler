@@ -18,14 +18,14 @@ struct Rng {
     double next() { state = mix(state); return static_cast<double>(state >> 11) * 0x1.0p-53; } // 0..1
 };
 
-enum class Kind { None, Jump, Reverse, Stutter, Dropout, TapeStop };
+enum class Kind { None, Jump, Reverse, Stutter, Dropout };
 
 struct Event {
     Kind kind = Kind::None;
     double start = 0.0, len = 0.0, value = 0.0; // value: a 0..1 random number each kind uses its own way
 };
 
-Event eventAt(const ChaosParams& p, int64_t step) {
+Event rawEventAt(const ChaosParams& p, int64_t step) {
     const double g = p.gridBeats;
     const uint32_t seed = static_cast<double>(step) * g >= p.switchBeats ? p.nextSeed : p.seed;
     Rng r{mix(mix((static_cast<uint64_t>(seed) << 32) | p.stream) ^ static_cast<uint64_t>(step))};
@@ -36,19 +36,35 @@ Event eventAt(const ChaosParams& p, int64_t step) {
     if (coin >= 0.6 * c) return {};
 
     // Jumps come first; the other kinds fade in as Chaos rises.
-    const double w[] = {1.0, std::max(0.0, c - 0.15), std::max(0.0, c - 0.3),
-                        0.5 * std::max(0.0, c - 0.45), 0.6 * std::max(0.0, c - 0.55)};
-    const Kind kinds[] = {Kind::Jump, Kind::Reverse, Kind::Stutter, Kind::Dropout, Kind::TapeStop};
+    const double w[] = {1.0, std::max(0.0, c - 0.15), std::max(0.0, c - 0.3), 0.5 * std::max(0.0, c - 0.45)};
+    const Kind kinds[] = {Kind::Jump, Kind::Reverse, Kind::Stutter, Kind::Dropout};
     double total = 0.0;
     for (double x : w) total += x;
     double pick = kindPick * total;
     Kind kind = Kind::Jump;
-    for (size_t i = 0; i < 5; ++i) {
+    for (size_t i = 0; i < 4; ++i) {
         if (pick < w[i]) { kind = kinds[i]; break; }
         pick -= w[i];
     }
     const double steps = lenPick < 0.5 ? 1.0 : lenPick < 0.85 ? 2.0 : 4.0;
-    return {kind, (static_cast<double>(step) + jitter * p.looseness) * g, steps * g, value};
+    const double len = kind == Kind::Dropout ? std::min(steps * g, 0.5) : steps * g; // silences: 1/8 note max
+    return {kind, (static_cast<double>(step) + jitter * p.looseness) * g, len, value};
+}
+
+// Like rawEventAt, but a Dropout that would follow another one within an 1/8 note becomes a Jump,
+// so silences never chain into a long pause.
+Event eventAt(const ChaosParams& p, int64_t step) {
+    Event e = rawEventAt(p, step);
+    if (e.kind != Kind::Dropout) return e;
+    const auto lookBack = static_cast<int64_t>(std::ceil(1.0 / p.gridBeats)) + 1; // dropouts are <= 0.5 beat
+    for (int64_t s = step - 1; s >= step - lookBack; --s) {
+        const Event prev = rawEventAt(p, s);
+        if (prev.kind == Kind::Dropout && prev.start + prev.len > e.start - 0.5) {
+            e.kind = Kind::Jump;
+            break;
+        }
+    }
+    return e;
 }
 
 } // namespace
@@ -89,10 +105,6 @@ ChaosRead chaosAt(const ChaosParams& p, double loopBeats, double beats) {
             break;
         }
         case Kind::Dropout: out.gain = 0.0f; break;
-        case Kind::TapeStop: // speed falls in a straight line from 1 to 0 over the event
-            out.beats = current.start + t - t * t / (2.0 * current.len);
-            out.tape = true;
-            break;
     }
     return out;
 }

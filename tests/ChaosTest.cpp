@@ -108,3 +108,19 @@ TEST_CASE("full chaos renders without clicks, in tape and warp mode, and repeats
         CHECK(same);
     }
 }
+
+TEST_CASE("dropouts are short gaps on any grid, and never chain") {
+    mensis::ChaosParams p;
+    p.amount = 1.0f;
+    double longest = 0.0, run = 0.0;
+    for (uint32_t seed = 0; seed < 40; ++seed) {
+        p.gridBeats = seed % 2 == 0 ? 1.0 : 0.125; // 1/4 (a 4-step event = 4 beats) and 1/32 (dropouts could chain)
+        p.seed = p.nextSeed = seed;
+        for (double b = 0.0; b < 256.0; b += 1.0 / 64.0) {
+            run = mensis::chaosAt(p, kLoopBeats, b).gain == 0.0f ? run + 1.0 / 64.0 : 0.0;
+            longest = std::max(longest, run);
+        }
+    }
+    CHECK(longest > 0.0);
+    CHECK(longest <= 0.5 + 1.0 / 64.0); // 1/8 note at most
+}

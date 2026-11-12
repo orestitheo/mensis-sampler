@@ -68,7 +68,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
 
         float l = 0.0f, r = 0.0f;
         float g = gain.getNextValue() * chaos.gain * static_cast<float>(std::min(1.0, chaos.edgeBeats / fadeBeats));
-        if (!p.warp || chaos.tape) {
+        if (!p.warp) {
             l = read(srcL, pos);
             r = read(srcR, pos);
             const double samplesFromSeam = std::min(phase, 1.0 - phase) * loopSamples;
