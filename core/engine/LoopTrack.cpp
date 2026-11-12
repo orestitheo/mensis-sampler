@@ -6,6 +6,8 @@ void LoopTrack::prepare(double newSampleRate) {
     sampleRate = newSampleRate;
     for (auto* v : {&start, &length, &gain, &pan, &pitchRatio, &grainMix}) v->reset(sampleRate, 0.05); // 50 ms glide, no zipper noise
     cloud.prepare(sampleRate);
+    resonator.prepare(sampleRate);
+    filter.prepare(sampleRate);
     primed = false;
 }
 
@@ -170,6 +172,8 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
             l = l * (1.0f - m) + wl * level * m;
             r = r * (1.0f - m) + wr * level * m;
         }
+        resonator.process(l, r, p.res);
+        filter.process(l, r, p.filter);
         const float b = pan.getNextValue();
         outL[i] += l * std::min(1.0f, 1.0f - b);
         outR[i] += r * std::min(1.0f, 1.0f + b);

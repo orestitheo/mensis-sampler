@@ -70,6 +70,38 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                    juce::AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int) {
                        return v <= -60.0f ? juce::String("-inf") : juce::String(v, 1) + " dB";
                    })));
+
+    // Resonator + filter: one group of 8 per track.
+    juce::StringArray chordNames;
+    for (const auto& c : mensis::kChords) chordNames.add(c.name);
+    auto text = [](auto fn) { return juce::AudioParameterFloatAttributes().withStringFromValueFunction(fn); };
+    auto pct = text([](float v, int) { return juce::String(juce::roundToInt(v * 100.0f)) + "%"; });
+    for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) {
+        auto id = [t](const char* name) { return juce::ParameterID{paramId(t, name), 1}; };
+        auto label = [t](const char* name) { return "T" + juce::String(t + 1) + " " + name; };
+        juce::NormalisableRange<float> decay(0.05f, 10.0f), cutoff(20.0f, 20000.0f);
+        decay.setSkewForCentre(1.0f);
+        cutoff.setSkewForCentre(1000.0f);
+        layout.add(std::make_unique<juce::AudioParameterFloat>(id("res.mix"), label("Res Mix"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, pct),
+                   std::make_unique<juce::AudioParameterFloat>(id("res.root"), label("Res Root"),
+                       juce::NormalisableRange<float>(24.0f, 96.0f, 1.0f), 48.0f,
+                       text([](float v, int) { return juce::MidiMessage::getMidiNoteName(juce::roundToInt(v), true, true, 3); })),
+                   std::make_unique<juce::AudioParameterChoice>(id("res.chord"), label("Res Chord"), chordNames, 0),
+                   std::make_unique<juce::AudioParameterFloat>(id("res.decay"), label("Res Decay"), decay, 1.0f,
+                       text([](float v, int) { return v < 1.0f ? juce::String(juce::roundToInt(v * 1000.0f)) + " ms" : juce::String(v, 1) + " s"; })),
+                   std::make_unique<juce::AudioParameterFloat>(id("res.color"), label("Res Color"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
+                       text([](float v, int) { return v < 0.02f ? juce::String("String") : v > 0.98f ? juce::String("Bell") : juce::String(juce::roundToInt(v * 100.0f)) + "%"; })),
+                   std::make_unique<juce::AudioParameterFloat>(id("flt.cutoff"), label("Cutoff"), cutoff, 20000.0f,
+                       text([](float v, int) { return v < 1000.0f ? juce::String(juce::roundToInt(v)) + " Hz" : juce::String(v / 1000.0f, 1) + " kHz"; })),
+                   std::make_unique<juce::AudioParameterFloat>(id("flt.reso"), label("Reso"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, pct),
+                   std::make_unique<juce::AudioParameterFloat>(id("flt.morph"), label("Morph"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f,
+                       text([](float v, int) {
+                           if (v < 0.02f) return juce::String("LP");
+                           if (std::abs(v - 0.5f) < 0.02f) return juce::String("BP");
+                           if (v > 0.98f) return juce::String("HP");
+                           return juce::String(v < 0.5f ? "LP>BP " : "BP>HP ") + juce::String(juce::roundToInt(std::fmod(v * 2.0f, 1.0f) * 100.0f)) + "%";
+                       })));
+    }
     return layout;
 }
 
@@ -82,7 +114,9 @@ MensisProcessor::MensisProcessor()
         auto raw = [&](const char* name) { return params.getRawParameterValue(paramId(t, name)); };
         trackParams[t] = {raw("start"), raw("length"), raw("bars"), raw("reverse"), raw("level"), raw("pan"), raw("warp"), raw("chaos"), raw("pitch"), raw("slice"),
                           raw("grain.mix"), raw("grain.size"), raw("grain.density"), raw("grain.spray"),
-                          raw("grain.detune"), raw("grain.reverse"), raw("grain.width"), raw("grain.freeze"), raw("on")};
+                          raw("grain.detune"), raw("grain.reverse"), raw("grain.width"), raw("grain.freeze"), raw("on"),
+                          raw("res.mix"), raw("res.root"), raw("res.chord"), raw("res.decay"), raw("res.color"),
+                          raw("flt.cutoff"), raw("flt.reso"), raw("flt.morph")};
         playPos[t].store(-1.0f);
         grainAnchor[t].store(-1.0f);
     }
@@ -99,7 +133,7 @@ void MensisProcessor::prepareToPlay(double sampleRate, int) {
     masterGain.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(masterDb->load(), -60.0f));
 }
 
-void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
+void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
     const int numSamples = buffer.getNumSamples();
@@ -130,6 +164,28 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         seedNew = wantSeed;
         seedSwitch = std::ceil(ppq / 4.0) * 4.0; // shortcut: assumes 4/4, like the loop length
     }
+    // MIDI notes held right now tune the resonators (the last 4 pressed win). Applied per block.
+    for (const auto meta : midi) {
+        const auto m = meta.getMessage();
+        auto drop = [&](int note) {
+            const auto end = std::remove(heldNotes.begin(), heldNotes.begin() + numHeld, note);
+            numHeld = static_cast<int>(end - heldNotes.begin());
+        };
+        if (m.isNoteOn()) {
+            drop(m.getNoteNumber());
+            if (numHeld == static_cast<int>(heldNotes.size())) drop(heldNotes[0]); // full: forget the oldest
+            heldNotes[static_cast<size_t>(numHeld++)] = m.getNoteNumber();
+        } else if (m.isNoteOff()) {
+            drop(m.getNoteNumber());
+        } else if (m.isAllNotesOff() || m.isAllSoundOff()) {
+            numHeld = 0;
+        }
+    }
+    std::array<float, 4> midiNotes{};
+    const int numMidiNotes = std::min(numHeld, 4);
+    for (int i = 0; i < numMidiNotes; ++i)
+        midiNotes[static_cast<size_t>(i)] = static_cast<float>(heldNotes[static_cast<size_t>(numHeld - numMidiNotes + i)]);
+
     mensis::ChaosParams chaos;
     chaos.gridBeats = kGridBeats[static_cast<size_t>(chaosGrid->load())];
     const auto feel = static_cast<int>(chaosFeel->load());
@@ -152,6 +208,9 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             lp.pitch = tp.pitch->load();
             lp.slice = tp.slice->load() > 0.5f;
             lp.on = tp.on->load() > 0.5f;
+            lp.res = {tp.resMix->load(), tp.resRoot->load(), static_cast<int>(tp.resChord->load()), tp.resDecay->load(),
+                      tp.resColor->load(), midiNotes, numMidiNotes};
+            lp.filter = {tp.fltCutoff->load(), tp.fltReso->load(), tp.fltMorph->load()};
             lp.grains = {tp.grainMix->load(), tp.grainSize->load(), tp.grainDensity->load(), tp.grainSpray->load(),
                          tp.grainDetune->load(), tp.grainReverse->load(), tp.grainWidth->load(),
                          tp.grainFreeze->load() > 0.5f, lp.chaos.amount, seedNew, static_cast<uint32_t>(t)};

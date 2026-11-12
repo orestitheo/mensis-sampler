@@ -6,7 +6,8 @@ target_sources(mensis_core INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/engine/LoopTrack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/engine/Chaos.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/engine/Slices.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/engine/Grains.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/engine/Grains.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/engine/Resonator.cpp)
 target_include_directories(mensis_core INTERFACE ${PROJECT_SOURCE_DIR})
 target_compile_definitions(mensis_core INTERFACE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(mensis_core INTERFACE juce::juce_audio_formats)

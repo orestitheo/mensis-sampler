@@ -78,3 +78,18 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
   by 1/sqrt(overlap) so dense clouds don't get louder.
 - MIX 0 = grains off, no CPU.
 - UI: LOOP / GRAINS page buttons switch what the 4 track strips show.
+
+## Section 5 notes: Resonator + morphing filter
+- Per track, after the grains: Resonator -> Filter -> level/pan.
+- Resonator: a bank of tuned band-pass resonators (TPT/RBJ biquads), 4 partials per note, up to 4 notes.
+  - ROOT (C0..C7, Live note names) + CHORD (Unison, Octaves, Fifths, Major, Minor, Sus4, Maj7, Min7).
+  - MIDI notes played into Mensis override ROOT/CHORD while held (last 4 held notes, all tracks).
+  - COLOR morphs the partial ratios from harmonic 1:2:3:4 (string) to free-bar 1:2.76:5.40:8.93 (bell).
+  - DECAY 0.05-10 s sets each resonator's ring time (higher partials ring shorter).
+  - Level: each mode is scaled by sqrt(Q) so long decays don't vanish, then a tanh soft clip keeps it
+    bounded (a pure tone right on a resonance would otherwise build up a lot). MIX crossfades dry/wet.
+  - Retuning glides over ~20 ms; coefficients update every 32 samples.
+- Filter: state-variable filter (stable when swept). CUTOFF 20 Hz-20 kHz, RESO, MORPH sweeps
+  low-pass -> band-pass -> high-pass. Defaults (LP, 20 kHz, no reso) = bypassed, bit-identical.
+- Params per track: `t1.res.mix`, `res.root`, `res.chord`, `res.decay`, `res.color`, `flt.cutoff`,
+  `flt.reso`, `flt.morph` (one Push bank of 8). UI: third page RESONATOR.

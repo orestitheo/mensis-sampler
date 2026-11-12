@@ -11,7 +11,9 @@ static int usage() {
                  "       mensis-cli slices <sample>   (prints where the hits are, in seconds)\n"
                  "                  [--chaos 0] [--seed 1] [--grid 0.25] [--loose 0] [--pitch 0] [--slice 0|1]\n"
                  "                  [--grain-mix 0] [--grain-size 80] [--grain-density 20] [--grain-spray 0.2]\n"
-                 "                  [--grain-detune 0] [--grain-reverse 0] [--grain-width 0.5]\n";
+                 "                  [--grain-detune 0] [--grain-reverse 0] [--grain-width 0.5]\n"
+                 "                  [--res-mix 0] [--res-root 48] [--res-chord 0] [--res-decay 1] [--res-color 0]\n"
+                 "                  [--cutoff 20000] [--reso 0] [--morph 0]\n";
     return 1;
 }
 
@@ -42,7 +44,9 @@ int main(int argc, char* argv[]) {
 
     std::map<std::string, std::string> opt{{"--bpm", "120"}, {"--bars", "1"}, {"--seconds", "8"}, {"--start", "0"},
         {"--length", "1"}, {"--reverse", "0"}, {"--level", "-6"}, {"--pan", "0"}, {"--warp", "1"}, {"--chaos", "0"}, {"--seed", "1"}, {"--grid", "0.25"}, {"--loose", "0"}, {"--pitch", "0"}, {"--slice", "0"}, {"--grain-mix", "0"}, {"--grain-size", "80"}, {"--grain-density", "20"},
-        {"--grain-spray", "0.2"}, {"--grain-detune", "0"}, {"--grain-reverse", "0"}, {"--grain-width", "0.5"}, {"--rate", "48000"}, {"--out", ""}};
+        {"--grain-spray", "0.2"}, {"--grain-detune", "0"}, {"--grain-reverse", "0"}, {"--grain-width", "0.5"},
+        {"--res-mix", "0"}, {"--res-root", "48"}, {"--res-chord", "0"}, {"--res-decay", "1"}, {"--res-color", "0"},
+        {"--cutoff", "20000"}, {"--reso", "0"}, {"--morph", "0"}, {"--rate", "48000"}, {"--out", ""}};
     for (int i = 3; i + 1 < argc; i += 2) {
         if (!opt.contains(argv[i])) return usage();
         opt[argv[i]] = argv[i + 1];
@@ -71,6 +75,12 @@ int main(int argc, char* argv[]) {
                      static_cast<float>(num("--grain-width"))};
     params.grains.chaos = params.chaos.amount;
     params.grains.seed = params.chaos.seed;
+    params.res.mix = static_cast<float>(num("--res-mix"));
+    params.res.root = static_cast<float>(num("--res-root"));
+    params.res.chord = static_cast<int>(num("--res-chord"));
+    params.res.decay = static_cast<float>(num("--res-decay"));
+    params.res.color = static_cast<float>(num("--res-color"));
+    params.filter = {static_cast<float>(num("--cutoff")), static_cast<float>(num("--reso")), static_cast<float>(num("--morph"))};
     mensis::LoopTrack track;
     track.prepare(rate);
     juce::AudioBuffer<float> out(2, static_cast<int>(seconds * rate));

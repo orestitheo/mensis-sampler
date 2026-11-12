@@ -1,6 +1,7 @@
 #pragma once
 #include "Chaos.h"
 #include "Grains.h"
+#include "Resonator.h"
 #include "Sample.h"
 
 namespace mensis {
@@ -18,6 +19,8 @@ struct LoopParams {
     bool slice = false;    // Chaos snaps to the sample's hits; with Warp, hits play Beats-style
     GrainParams grains;    // mix 0 = off
     bool on = true;        // off = fades out over 50 ms (track mute)
+    ResonatorParams res;   // mix 0 = off
+    FilterParams filter;   // defaults = open (bypassed)
 };
 
 // One looping track. The play position comes straight from the host's beat position,
@@ -41,6 +44,8 @@ private:
     bool primed = false; // first render jumps straight to the param values instead of gliding from 0
     juce::SmoothedValue<float> start, length, gain, pan, pitchRatio, grainMix;
     GrainCloud cloud;
+    Resonator resonator;
+    MorphFilter filter;
 
     // The hits inside the loop region, rebuilt each block (fixed size: no allocation on the audio thread).
     // shortcut: max 512 hits per loop region; later ones are ignored

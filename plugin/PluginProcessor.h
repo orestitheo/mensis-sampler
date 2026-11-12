@@ -79,6 +79,14 @@ private:
         std::atomic<float>* grainWidth;
         std::atomic<float>* grainFreeze;
         std::atomic<float>* on;
+        std::atomic<float>* resMix;
+        std::atomic<float>* resRoot;
+        std::atomic<float>* resChord;
+        std::atomic<float>* resDecay;
+        std::atomic<float>* resColor;
+        std::atomic<float>* fltCutoff;
+        std::atomic<float>* fltReso;
+        std::atomic<float>* fltMorph;
     };
     std::array<TrackParams, kNumTracks> trackParams{};
     std::array<mensis::LoopTrack, kNumTracks> tracks;
@@ -106,6 +114,8 @@ private:
     uint32_t seedOld = 0, seedNew = 0; // audio thread only
     double seedSwitch = -1e300;
     bool seedStarted = false;
+    std::array<int, 16> heldNotes{}; // MIDI notes held, oldest first (audio thread only)
+    int numHeld = 0;
     std::atomic<double> lastBpm{120.0};
     double internalPpq = 0.0; // clock for Standalone, where there is no host
 };
