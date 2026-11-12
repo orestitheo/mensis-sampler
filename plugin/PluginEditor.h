@@ -94,8 +94,7 @@ public:
 
         const auto [st, en] = region();
         const float w = b.getWidth(), mid = b.getCentreY(), half = b.getHeight() * 0.5f - 2.0f;
-        const bool moving = grab == Grab::Move || (grab == Grab::None && hover == Grab::Move);
-        g.setColour(MensisLook::fg.withAlpha(moving ? 0.16f : 0.08f));
+        g.setColour(MensisLook::fg.withAlpha(grab == Grab::New ? 0.16f : 0.08f));
         g.fillRect(b.withX(st * w).withRight(en * w));
         for (size_t x = 0; x < peaks.size(); ++x) {
             const float fx = static_cast<float>(x) / w;
@@ -116,12 +115,11 @@ public:
         }
     }
 
-    // Drag inside the region: move it. Drag an edge: resize. Drag on empty waveform: draw a new region.
+    // Drag anywhere: the part you sweep over becomes the loop. Drag an edge: resize that side.
     // Double-click: the whole sample.
     void mouseMove(const juce::MouseEvent& e) override {
         const Grab g = proc.getSample(track) == nullptr ? Grab::None : grabAt(e.position.x);
         setMouseCursor(g == Grab::Start || g == Grab::End ? juce::MouseCursor::LeftRightResizeCursor
-                       : g == Grab::Move ? juce::MouseCursor::DraggingHandCursor
                        : g == Grab::New ? juce::MouseCursor::IBeamCursor : juce::MouseCursor::NormalCursor);
         if (g != hover) { hover = g; repaint(); }
     }
@@ -138,16 +136,11 @@ public:
     }
 
     void mouseDrag(const juce::MouseEvent& e) override {
-        const float x = xNorm(e), len = downEnd - downStart;
+        const float x = xNorm(e);
         switch (grab) {
             case Grab::None: return;
             case Grab::Start: apply(std::min(x, downEnd), downEnd); break;
             case Grab::End: apply(downStart, std::max(x, downStart)); break;
-            case Grab::Move: { // same length, slides between the sample's ends
-                const float st = std::clamp(downStart + x - downX, 0.0f, 1.0f - len);
-                apply(st, st + len);
-                break;
-            }
             case Grab::New:
                 if (e.getDistanceFromDragStartX() == 0) return; // a plain click doesn't wipe the region
                 apply(std::min(x, downX), std::max(x, downX));
@@ -181,14 +174,14 @@ private:
         const float st = value("start");
         return {st, st + value("length") * (1.0f - st)};
     }
-    enum class Grab { None, Start, End, Move, New };
+    enum class Grab { None, Start, End, New };
 
     Grab grabAt(float px) const {
         const auto [st, en] = region();
         const float w = static_cast<float>(getWidth());
         const float ds = std::abs(px - st * w), de = std::abs(px - en * w);
         if (std::min(ds, de) <= 6.0f) return ds < de ? Grab::Start : Grab::End; // 6 px grab zone per edge
-        return px > st * w && px < en * w ? Grab::Move : Grab::New;
+        return Grab::New;
     }
 
     // Region as 0..1 of the sample -> Start and Length params (Length = share of what's after Start).
