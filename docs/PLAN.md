@@ -44,7 +44,8 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
   Stutter (repeat a 1, 1/2 or 1/4 step slice), Dropout (silence, 1/8 note max). Each lasts 1, 2 or 4 steps.
   No tape stops: Oresti didn't like the record-player slowdown. Raising Chaos only adds events; the ones you already hear stay.
 - Every jump in the audio gets a 5 ms dip (fade out/in) so there are no clicks.
-- SEED is a param (saved with the set). RE-ROLL picks a new seed; it takes over at the next bar.
+- SEED is a param (saved with the set). A new seed takes over at the next bar. (The RE-ROLL button was
+  removed: turning SEED does the same.)
 - New param IDs: `chaos`, `chaos.grid`, `chaos.feel`, `seed`, `t1.chaos` (…t4). Track params first
   (8 per track = one Push bank each), global Chaos params in bank 5.
 

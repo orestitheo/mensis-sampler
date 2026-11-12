@@ -870,16 +870,6 @@ public:
         }
         volume.attach(*p.params.getParameter("master"), "VOLUME");
         addAndMakeVisible(volume);
-        reroll.setButtonText("RE-ROLL");
-        reroll.onClick = [this] { // new seed; the audio switches to it at the next bar
-            auto* seed = proc.params.getParameter("seed");
-            const int now = static_cast<int>(seed->convertFrom0to1(seed->getValue()));
-            const int next = (now + 1 + juce::Random::getSystemRandom().nextInt(9999)) % 10000; // never the same seed
-            seed->beginChangeGesture();
-            seed->setValueNotifyingHost(seed->convertTo0to1(static_cast<float>(next)));
-            seed->endChangeGesture();
-        };
-        addAndMakeVisible(reroll);
 
         const std::array<const char*, 6> pageNames{"LOOP", "GRAINS", "RESO", "COLOR", "SPACE", "MOD"};
         for (int i = 0; i < 6; ++i) {
@@ -939,8 +929,6 @@ public:
         auto head = getLocalBounds().reduced(20, 0).removeFromTop(kHeader).reduced(0, 12);
         volume.setBounds(head.removeFromRight(70)); // master, far right
         head.removeFromRight(20);
-        reroll.setBounds(head.removeFromRight(72).withSizeKeepingCentre(72, 24));
-        head.removeFromRight(8);
         for (size_t i = globalKnobs.size(); i-- > 0;) globalKnobs[i].setBounds(head.removeFromRight(i == 0 ? 76 : 60));
         auto tabs = head.withTrimmedLeft(130).removeFromLeft(6 * 62).withSizeKeepingCentre(6 * 62, 24);
         for (auto& b : pages) b.setBounds(tabs.removeFromLeft(62).withTrimmedRight(4));
@@ -1008,7 +996,6 @@ private:
     std::array<std::unique_ptr<TrackStrip>, MensisProcessor::kNumTracks> strips;
     std::array<Knob, 5> globalKnobs;
     Knob volume;
-    juce::TextButton reroll;
     std::array<juce::TextButton, 6> pages; // LOOP / GRAINS / RESO / COLOR / SPACE / MOD
     SpacePanel spacePanel{proc};
     ModPanel modPanel{proc};
