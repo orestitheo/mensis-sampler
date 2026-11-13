@@ -21,6 +21,9 @@ public:
         setColour(juce::AlertWindow::backgroundColourId, bg);
         setColour(juce::AlertWindow::textColourId, fg);
         setColour(juce::AlertWindow::outlineColourId, fg);
+        setColour(juce::TooltipWindow::backgroundColourId, bg);
+        setColour(juce::TooltipWindow::textColourId, fg);
+        setColour(juce::TooltipWindow::outlineColourId, mid);
     }
 
     static juce::Font font(float size, bool bold = false) {
@@ -52,6 +55,11 @@ public:
 
     void drawButtonBackground(juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down) override {
         const auto box = b.getLocalBounds().toFloat().reduced(0.5f);
+        if (!b.isEnabled()) { // off: a dim outline only, even if it's switched on underneath
+            g.setColour(dim);
+            g.drawRect(box, 1.0f);
+            return;
+        }
         if (b.getToggleState() || down) {
             g.setColour(fg);
             g.fillRect(box);
@@ -64,6 +72,11 @@ public:
     }
 
     juce::Font getTextButtonFont(juce::TextButton&, int) override { return font(11.0f, true); }
+    void drawButtonText(juce::Graphics& g, juce::TextButton& b, bool, bool down) override {
+        g.setFont(getTextButtonFont(b, b.getHeight()));
+        g.setColour(!b.isEnabled() ? mid.withAlpha(0.6f) : b.getToggleState() || down ? bg : fg); // black on the white fill
+        g.drawText(b.getButtonText(), b.getLocalBounds(), juce::Justification::centred);
+    }
     juce::Font getLabelFont(juce::Label& l) override { return l.getFont(); }
     juce::Label* createSliderTextBox(juce::Slider& s) override {
         auto* l = LookAndFeel_V4::createSliderTextBox(s);
@@ -522,6 +535,11 @@ private:
 };
 
 // One track: number, Load button, file name; waveform on the left, knobs and switches on the right.
+inline juce::String barsText(double bars) {
+    if (bars < 1.0) return (bars < 0.375 ? "1/4" : "1/2") + juce::String(" BAR");
+    return juce::String(juce::roundToInt(bars)) + (bars > 1.0 ? " BARS" : " BAR");
+}
+
 class TrackStrip final : public juce::Component {
 public:
     static constexpr int kKnobAreaWidth = 9 * 60; // knob columns + toggle column, right of the waveform
@@ -551,7 +569,7 @@ public:
             addAndMakeVisible(knobs[i]);
         }
         const std::array<std::pair<const char*, const char*>, 4> toggleIds{
-            {{"reverse", "REV"}, {"warp", "WARP"}, {"slice", "SLICE"}, {"beat", "BEAT"}}};
+            {{"reverse", "REVERSE"}, {"warp", "WARP"}, {"slice", "SLICE"}, {"beat", "BEAT"}}};
         toggles[3].button.setTooltip("BEAT: Chaos shuffles hits and adds rolls, always on the grid (needs SLICE)");
         for (size_t i = 0; i < toggles.size(); ++i) attachToggle(toggles[i], toggleIds[i].first, toggleIds[i].second);
 
@@ -593,10 +611,19 @@ public:
 
     void refresh() {
         const auto file = proc.getSampleFile(track);
-        name.setText(file == juce::File{} ? "empty" : file.getFileNameWithoutExtension(), juce::dontSendNotification);
+        const bool loaded = file != juce::File{};
+        name.setText(loaded ? file.getFileNameWithoutExtension() + "   " + barsText(proc.getBars(track)) : juce::String("empty"),
+                     juce::dontSendNotification);
+        const float alpha = loaded ? 1.0f : 0.4f; // empty track: knobs dimmed (still usable, for setting up first)
+        for (auto& k : knobs) k.setAlpha(alpha);
+        for (auto& k : grainKnobs) k.setAlpha(alpha);
+        for (auto& k : resKnobs) k.setAlpha(alpha);
+        for (auto& k : colorKnobs) k.setAlpha(alpha);
+        for (auto& t : toggles) t.button.setAlpha(alpha);
+        freeze.button.setAlpha(alpha);
         knobs[3].setEnabled(toggles[1].button.getToggleState()); // Pitch only works with Warp on
         toggles[3].button.setEnabled(toggles[2].button.getToggleState()); // BEAT needs SLICE
-        remove.setEnabled(file != juce::File{});
+        remove.setEnabled(loaded);
         wave.setAlpha(play.getToggleState() ? 1.0f : 0.3f); // muted tracks fade back
         number.setColour(juce::Label::textColourId, play.getToggleState() ? MensisLook::fg : MensisLook::mid);
         wave.repaint();
@@ -691,7 +718,7 @@ public:
         g.fillAll(MensisLook::bg); // covers the track strips' divider lines underneath
         g.setColour(MensisLook::dim);
         g.fillRect(static_cast<float>(kSendWidth) + 10.0f, 16.0f, 1.0f, static_cast<float>(getHeight()) - 32.0f);
-        auto title = controlsArea().translated(0, -44).withHeight(36);
+        auto title = getLocalBounds().withTrimmedLeft(kSendWidth + 24).withHeight(28);
         g.setColour(MensisLook::fg);
         g.setFont(MensisLook::font(13.0f, true));
         g.drawText("S P A C E", title, juce::Justification::bottomLeft);
@@ -713,9 +740,8 @@ public:
 
 private:
     static constexpr int kSendWidth = 64, kRowH = 110;
-    juce::Rectangle<int> controlsArea() const { // two rows of knobs, centred right of the sends
-        const auto r = getLocalBounds().withTrimmedLeft(kSendWidth + 24);
-        return r.withSizeKeepingCentre(r.getWidth(), 2 * kRowH).translated(0, 20);
+    juce::Rectangle<int> controlsArea() const { // two rows of knobs under the heading, right of the sends (like MOD)
+        return getLocalBounds().withTrimmedLeft(kSendWidth + 24).withTrimmedTop(40).withHeight(2 * kRowH);
     }
     std::array<Knob, MensisProcessor::kNumTracks> sends;
     std::array<Knob, 6> knobs;
@@ -921,10 +947,13 @@ private:
     bool blink = false;
 };
 
-class MensisEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget,
-                           public juce::TextDragAndDropTarget, public KnobHost, private juce::Timer {
+// The whole UI at its design size (kWidth x kHeight). The editor below scales it as one piece.
+class MensisPanel final : public juce::Component, public juce::FileDragAndDropTarget,
+                          public juce::TextDragAndDropTarget, public KnobHost, private juce::Timer {
 public:
-    explicit MensisEditor(MensisProcessor& p) : AudioProcessorEditor(p), proc(p) {
+    static constexpr int kWidth = 1040, kHeight = 884;
+
+    explicit MensisPanel(MensisProcessor& p) : proc(p) {
         setLookAndFeel(&look);
         for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) {
             strips[t] = std::make_unique<TrackStrip>(p, t);
@@ -960,12 +989,12 @@ public:
         modPanel.onMap = [this](int slot) { arm(mapArmed == slot ? -1 : slot); };
 
         sendLookAndFeelChange(); // the strips were built before they had a parent; restyle their knob value boxes
-        setSize(1040, 884); // tall strips: room for a big waveform; scene bar at the bottom
+        setSize(kWidth, kHeight); // tall strips: room for a big waveform; scene bar at the bottom
         timerCallback();
         startTimerHz(30); // moves the playheads; also picks up samples restored from a saved Live set
     }
 
-    ~MensisEditor() override { setLookAndFeel(nullptr); }
+    ~MensisPanel() override { setLookAndFeel(nullptr); }
 
     std::optional<float> modulatedValue(const juce::RangedAudioParameter& param) override {
         return proc.getModulatedValue(param);
@@ -1080,4 +1109,29 @@ private:
         repaint(); // header hint
     }
     std::unique_ptr<juce::FileChooser> chooser;
+    juce::TooltipWindow tooltips{this, 500}; // shows the buttons' explanations after half a second
+};
+
+// The plugin window: drag the corner to resize; the UI scales as a whole, keeping its shape.
+class MensisEditor final : public juce::AudioProcessorEditor {
+public:
+    explicit MensisEditor(MensisProcessor& p) : AudioProcessorEditor(p), proc(p), panel(p) {
+        addAndMakeVisible(panel);
+        constexpr double w = MensisPanel::kWidth, h = MensisPanel::kHeight;
+        setResizable(true, true);
+        setResizeLimits(juce::roundToInt(w * 0.6), juce::roundToInt(h * 0.6), juce::roundToInt(w * 1.6), juce::roundToInt(h * 1.6));
+        getConstrainer()->setFixedAspectRatio(w / h);
+        const double scale = p.getUiScale();
+        setSize(juce::roundToInt(w * scale), juce::roundToInt(h * scale)); // the size you left it at
+    }
+
+    void resized() override {
+        const float scale = static_cast<float>(getWidth()) / static_cast<float>(MensisPanel::kWidth);
+        panel.setTransform(juce::AffineTransform::scale(scale));
+        proc.setUiScale(scale);
+    }
+
+private:
+    MensisProcessor& proc;
+    MensisPanel panel;
 };

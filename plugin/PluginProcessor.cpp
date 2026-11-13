@@ -18,6 +18,29 @@ constexpr std::array<double, 12> kDelayBeats{0.125, 1.0 / 6.0, 0.25, 1.0 / 3.0, 
 // Param IDs are stable: never rename once used in Live (automation and presets would break).
 juce::String paramId(size_t track, const char* name) { return "t" + juce::String(track + 1) + "." + name; }
 
+// How knobs read: 0..1 values as percent, levels in dB, pan as L/C/R. Typing works too ("50", "50%", "L 30").
+juce::AudioParameterFloatAttributes percentText() {
+    return juce::AudioParameterFloatAttributes()
+        .withStringFromValueFunction([](float v, int) { return juce::String(juce::roundToInt(v * 100.0f)) + "%"; })
+        .withValueFromStringFunction([](const juce::String& s) { return s.retainCharacters("-0123456789.").getFloatValue() / 100.0f; });
+}
+juce::AudioParameterFloatAttributes dbText() {
+    return juce::AudioParameterFloatAttributes()
+        .withStringFromValueFunction([](float v, int) { return v <= -60.0f ? juce::String("-inf") : juce::String(v, 1) + " dB"; })
+        .withValueFromStringFunction([](const juce::String& s) { return s.containsIgnoreCase("inf") ? -60.0f : s.getFloatValue(); });
+}
+juce::AudioParameterFloatAttributes panText() {
+    return juce::AudioParameterFloatAttributes()
+        .withStringFromValueFunction([](float v, int) {
+            const int amount = juce::roundToInt(std::abs(v) * 100.0f);
+            return amount == 0 ? juce::String("C") : juce::String(v < 0.0f ? "L " : "R ") + juce::String(amount);
+        })
+        .withValueFromStringFunction([](const juce::String& s) {
+            const float amount = s.retainCharacters("0123456789.").getFloatValue() / 100.0f;
+            return s.trim().startsWithIgnoreCase("L") || s.trim().startsWith("-") ? -amount : amount;
+        });
+}
+
 juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
     // One track's params per group, in order, so Push banks of 8 line up with tracks.
@@ -25,8 +48,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
         auto id = [t](const char* name) { return juce::ParameterID{paramId(t, name), 1}; };
         auto label = [t](const char* name) { return "T" + juce::String(t + 1) + " " + name; };
         layout.add(std::make_unique<juce::AudioParameterBool>(id("on"), label("On"), true),
-                   std::make_unique<juce::AudioParameterFloat>(id("start"), label("Start"), 0.0f, 1.0f, 0.0f),
-                   std::make_unique<juce::AudioParameterFloat>(id("length"), label("Length"), 0.01f, 1.0f, 1.0f),
+                   std::make_unique<juce::AudioParameterFloat>(id("start"), label("Start"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, percentText()),
+                   std::make_unique<juce::AudioParameterFloat>(id("length"), label("Length"), juce::NormalisableRange<float>(0.01f, 1.0f), 1.0f, percentText()),
                    std::make_unique<juce::AudioParameterChoice>(id("bars"), label("Bars"), kBarNames, 2),
                    std::make_unique<juce::AudioParameterFloat>(id("pitch"), label("Pitch"),
                        juce::NormalisableRange<float>(-24.0f, 24.0f, 1.0f), 0.0f,
@@ -38,19 +61,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                    std::make_unique<juce::AudioParameterBool>(id("warp"), label("Warp"), true),
                    std::make_unique<juce::AudioParameterBool>(id("slice"), label("Slice"), false),
                    std::make_unique<juce::AudioParameterFloat>(id("level"), label("Level"),
-                       juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f), -6.0f),
-                   std::make_unique<juce::AudioParameterFloat>(id("pan"), label("Pan"), -1.0f, 1.0f, 0.0f),
-                   std::make_unique<juce::AudioParameterFloat>(id("chaos"), label("Chaos"), 0.0f, 1.0f, 1.0f));
+                       juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f), -6.0f, dbText()),
+                   std::make_unique<juce::AudioParameterFloat>(id("pan"), label("Pan"), juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f, panText()),
+                   std::make_unique<juce::AudioParameterFloat>(id("chaos"), label("Chaos"), juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f, percentText()));
     }
     // Global Chaos: after the tracks, so each track stays one Push bank of 8.
-    layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"chaos", 1}, "Chaos", 0.0f, 1.0f, 0.0f),
+    layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"chaos", 1}, "Chaos", juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, percentText()),
                std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"chaos.grid", 1}, "Chaos Grid", kGridNames, 1),
                std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"chaos.feel", 1}, "Chaos Feel", kFeelNames, 0),
                std::make_unique<juce::AudioParameterInt>(juce::ParameterID{"seed", 1}, "Seed", 0, 9999, 1));
 
     // Grain clouds: one group of 8 per track, after the globals, so each is one Push bank.
     auto shown = [](auto fn) { return juce::AudioParameterFloatAttributes().withStringFromValueFunction(fn); };
-    auto percent = shown([](float v, int) { return juce::String(juce::roundToInt(v * 100.0f)) + "%"; });
+    const auto percent = percentText();
     for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) {
         auto id = [t](const char* name) { return juce::ParameterID{paramId(t, name), 1}; };
         auto label = [t](const char* name) { return "T" + juce::String(t + 1) + " Grain " + name; };
@@ -72,16 +95,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                    std::make_unique<juce::AudioParameterBool>(id("grain.freeze"), label("Freeze"), false));
     }
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"master", 1}, "Volume",
-                   juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f, 2.5f), 0.0f, // skew: fine control near 0 dB
-                   juce::AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int) {
-                       return v <= -60.0f ? juce::String("-inf") : juce::String(v, 1) + " dB";
-                   })));
+                   juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f, 2.5f), 0.0f, dbText())); // skew: fine control near 0 dB
 
     // Resonator + filter: one group of 8 per track.
     juce::StringArray chordNames;
     for (const auto& c : mensis::kChords) chordNames.add(c.name);
     auto text = [](auto fn) { return juce::AudioParameterFloatAttributes().withStringFromValueFunction(fn); };
-    auto pct = text([](float v, int) { return juce::String(juce::roundToInt(v * 100.0f)) + "%"; });
+    const auto pct = percentText();
     for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) {
         auto id = [t](const char* name) { return juce::ParameterID{paramId(t, name), 1}; };
         auto label = [t](const char* name) { return "T" + juce::String(t + 1) + " " + name; };
@@ -149,8 +169,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"space.tone", 1}, "Space Tone",
                    juce::NormalisableRange<float>(0.0f, 1.0f), 0.5f, pct),
                std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"space.return", 1}, "Space Return",
-                   juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f, 2.5f), 0.0f,
-                   text([](float v, int) { return v <= -60.0f ? juce::String("-inf") : juce::String(v, 1) + " dB"; })),
+                   juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f, 2.5f), 0.0f, dbText()),
                std::make_unique<juce::AudioParameterBool>(juce::ParameterID{"space.freeze", 1}, "Space Freeze", false));
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"swing", 1}, "Swing",
                    juce::NormalisableRange<float>(50.0f, 75.0f), 50.0f,
@@ -482,6 +501,7 @@ void MensisProcessor::getStateInformation(juce::MemoryBlock& dest) {
         state.setProperty(paramId(t, "file"), getSampleFile(t).getFullPathName(), nullptr);
     for (size_t m = 0; m < kModSlots; ++m)
         state.setProperty("mod" + juce::String(m + 1) + ".target", getModTarget(m), nullptr);
+    state.setProperty("uiScale", uiScale, nullptr);
     state.removeChild(state.getChildWithName("SCENES"), nullptr);
     juce::ValueTree sceneTree("SCENES");
     for (int slot = 0; slot < kScenes; ++slot) {
@@ -509,6 +529,7 @@ void MensisProcessor::setStateInformation(const void* data, int sizeInBytes) {
     }
     for (size_t m = 0; m < kModSlots; ++m)
         setModTarget(m, state.getProperty("mod" + juce::String(m + 1) + ".target").toString());
+    uiScale = std::clamp(static_cast<double>(state.getProperty("uiScale", 1.0)), 0.6, 1.6);
     for (auto& scene : scenes) scene.reset();
     for (const auto& scene : state.getChildWithName("SCENES")) {
         const int slot = scene.getProperty("slot", -1);

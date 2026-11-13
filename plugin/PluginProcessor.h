@@ -42,6 +42,10 @@ public:
     bool hasScene(int slot) const { return scenes[static_cast<size_t>(slot)].has_value(); }
     int getCurrentScene() const { return currentScene; }
     int getPendingScene() const; // waiting for the bar, -1 if none
+
+    // Window size as a scale of the design size; saved with the set. Message thread.
+    double getUiScale() const { return uiScale; }
+    void setUiScale(double s) { uiScale = s; }
     void updateScenes();         // message thread, ~30x/s (own timer): finishes a recall the audio thread started
 
     // Grain cloud for drawing, any thread. env 0 = grain not playing; anchor -1 = cloud off.
@@ -156,6 +160,7 @@ private:
     std::vector<char> sceneMask;
     std::atomic<int> sceneState{0};
     int pendingSlot = -1, queuedSlot = -1, currentScene = -1; // message thread
+    double uiScale = 1.0;
     void handOverScene();      // message thread: queued scene -> pending, when the audio thread allows
     void timerCallback() override { updateScenes(); }
     std::unordered_map<const std::atomic<float>*, int> rawIndex; // raw value -> allParams index (fixed)
