@@ -600,7 +600,9 @@ public:
     }
 
     // 0 = LOOP knobs, 1 = GRAINS knobs, 2 = RESONATOR + filter, 3 = COLOR. The waveform and track header stay.
-    void setPage(int page) {
+    void setPage(int newPage) {
+        page = newPage;
+        repaint(); // group labels
         for (auto& k : resKnobs) k.setVisible(page == 2);
         for (auto& k : colorKnobs) k.setVisible(page == 3);
         for (auto& k : knobs) k.setVisible(page == 0);
@@ -632,6 +634,14 @@ public:
     void paint(juce::Graphics& g) override {
         g.setColour(MensisLook::dim);
         g.drawHorizontalLine(0, 0.0f, static_cast<float>(getWidth()));
+        if (page < 0 || page >= kPages) return;
+        for (const auto& [label, r] : headers[static_cast<size_t>(page)]) { // tiny group name over a thin line
+            g.setColour(MensisLook::mid);
+            g.setFont(MensisLook::font(9.0f, true));
+            g.drawText(label, r.withTrimmedBottom(4), juce::Justification::bottomLeft);
+            g.setColour(MensisLook::dim);
+            g.fillRect(r.getX(), r.getBottom() - 2, r.getWidth(), 1);
+        }
     }
 
     void resized() override {
@@ -648,25 +658,55 @@ public:
 
         auto right = area.removeFromRight(kKnobAreaWidth);
         wave.setBounds(area.withTrimmedRight(16));
-        right = right.withSizeKeepingCentre(right.getWidth(), std::min(right.getHeight(), 96)); // knobs stay knob-sized
-        for (size_t i = 0; i < knobs.size(); ++i) {
-            const auto col = right.removeFromLeft(60);
-            knobs[i].setBounds(col);
-            grainKnobs[i].setBounds(col); // same columns, other page
-            resKnobs[i].setBounds(col);
-            colorKnobs[i].setBounds(col);
-        }
-        resKnobs[7].setBounds(right.withWidth(60)); // 8th knob where the toggles are on the other pages
-        colorKnobs[7].setBounds(right.withWidth(60));
-        right = right.withSizeKeepingCentre(right.getWidth() - 8, 92);
-        freeze.button.setBounds(right.withHeight(20).reduced(4, 0));
-        for (auto& t : toggles) {
-            t.button.setBounds(right.removeFromTop(20).reduced(4, 0));
-            right.removeFromTop(4);
+
+        // Each page's controls in small groups: a label + line on top, knobs below, switches in a column.
+        const auto block = right.withSizeKeepingCentre(right.getWidth(), std::min(right.getHeight(), kHeaderH + 96));
+        for (int pg = 0; pg < kPages; ++pg) {
+            auto& hs = headers[static_cast<size_t>(pg)];
+            hs.clear();
+            int x = block.getX();
+            for (const auto& group : groupsFor(pg)) {
+                const int w = static_cast<int>(group.knobs.size()) * kKnobW + (group.buttons.empty() ? 0 : kButtonW);
+                hs.push_back({group.name, {x, block.getY(), w, kHeaderH}});
+                auto row = juce::Rectangle<int>(x, block.getY() + kHeaderH, w, block.getHeight() - kHeaderH);
+                for (auto* k : group.knobs) k->setBounds(row.removeFromLeft(kKnobW));
+                if (!group.buttons.empty()) {
+                    const int stackH = static_cast<int>(group.buttons.size()) * 26 - 6;
+                    auto stack = row.withSizeKeepingCentre(row.getWidth(), stackH).translated(0, 4).reduced(4, 0);
+                    for (auto* b : group.buttons) {
+                        b->setBounds(stack.removeFromTop(20));
+                        stack.removeFromTop(6);
+                    }
+                }
+                x += w + kGap;
+            }
         }
     }
 
 private:
+    static constexpr int kPages = 4, kKnobW = 54, kButtonW = 64, kGap = 10, kHeaderH = 16;
+
+    struct Group { const char* name; std::vector<juce::Component*> knobs, buttons; };
+    std::vector<Group> groupsFor(int pg) {
+        switch (pg) {
+            case 0: return {{"REGION", {&knobs[0], &knobs[1]}, {}},
+                            {"SPEED", {&knobs[2], &knobs[3]}, {&toggles[0].button, &toggles[1].button}},
+                            {"", {&knobs[6]}, {&toggles[2].button, &toggles[3].button}},
+                            {"OUT", {&knobs[4], &knobs[5]}, {}}};
+            case 1: return {{"GRAIN", {&grainKnobs[0], &grainKnobs[1], &grainKnobs[2]}, {&freeze.button}},
+                            {"SCATTER", {&grainKnobs[3], &grainKnobs[4], &grainKnobs[5], &grainKnobs[6]}, {}}};
+            case 2: return {{"RESONATOR", {&resKnobs[0], &resKnobs[1], &resKnobs[2], &resKnobs[3], &resKnobs[4]}, {}},
+                            {"FILTER", {&resKnobs[5], &resKnobs[6], &resKnobs[7]}, {}}};
+            case 3: return {{"SATURATE", {&colorKnobs[0], &colorKnobs[1]}, {}},
+                            {"CRUSH", {&colorKnobs[2], &colorKnobs[3]}, {}},
+                            {"SHAPE", {&colorKnobs[4], &colorKnobs[5]}, {}},
+                            {"OUT", {&colorKnobs[6], &colorKnobs[7]}, {}}};
+            default: return {};
+        }
+    }
+    std::array<std::vector<std::pair<juce::String, juce::Rectangle<int>>>, kPages> headers;
+    int page = 0;
+
     juce::String id(const char* name) const { return "t" + juce::String(track + 1) + "." + name; }
 
     struct Toggle { juce::TextButton button; std::unique_ptr<juce::ButtonParameterAttachment> attachment; };
@@ -691,13 +731,15 @@ private:
     std::unique_ptr<juce::ButtonParameterAttachment> playAttachment;
 };
 
-// SPACE page: one SEND per track (lined up with its strip) and the shared delay + reverb controls.
-class SpacePanel final : public juce::Component {
+// SPACE page: one SEND per track (lined up with its strip), lines carrying each send into a shared bus
+// and on into the Space's knobs. Line brightness = send amount.
+class SpacePanel final : public juce::Component, private juce::Timer {
 public:
     explicit SpacePanel(MensisProcessor& p) {
         for (size_t t = 0; t < sends.size(); ++t) {
             sends[t].attach(*p.params.getParameter("t" + juce::String(t + 1) + ".send"), "SEND");
             addAndMakeVisible(sends[t]);
+            sendValues[t] = p.params.getRawParameterValue("t" + juce::String(t + 1) + ".send");
         }
         const std::array<std::pair<const char*, const char*>, 6> ids{{{"space.time", "TIME"}, {"space.feedback", "FEEDBACK"},
             {"space.blend", "BLEND"}, {"space.size", "SIZE"}, {"space.tone", "TONE"}, {"space.return", "RETURN"}}};
@@ -707,6 +749,7 @@ public:
         }
         freeze.setButtonText("FREEZE");
         freeze.setClickingTogglesState(true);
+        freeze.setTooltip("Hold whatever is ringing in the Space, forever");
         freezeAttachment = std::make_unique<juce::ButtonParameterAttachment>(*p.params.getParameter("space.freeze"), freeze);
         addAndMakeVisible(freeze);
     }
@@ -714,24 +757,46 @@ public:
     // Where each track strip sits, in this panel's coordinates, so its SEND lines up with it.
     void setRows(const std::array<juce::Rectangle<int>, MensisProcessor::kNumTracks>& r) { rows = r; resized(); }
 
+    void visibilityChanged() override {
+        if (isVisible()) startTimerHz(15);
+        else stopTimer();
+    }
+
     void paint(juce::Graphics& g) override {
         g.fillAll(MensisLook::bg); // covers the track strips' divider lines underneath
-        g.setColour(MensisLook::dim);
-        g.fillRect(static_cast<float>(kSendWidth) + 10.0f, 16.0f, 1.0f, static_cast<float>(getHeight()) - 32.0f);
-        auto title = getLocalBounds().withTrimmedLeft(kSendWidth + 24).withHeight(28);
+        const auto block = knobBlock();
+        auto title = block.translated(0, -40).withHeight(28);
         g.setColour(MensisLook::fg);
         g.setFont(MensisLook::font(13.0f, true));
         g.drawText("S P A C E", title, juce::Justification::bottomLeft);
         g.setColour(MensisLook::mid);
         g.setFont(MensisLook::font(10.0f));
         g.drawText("SHARED DELAY + REVERB", title, juce::Justification::bottomRight);
+
+        // Send lines -> bus -> into the Space.
+        const float merge = static_cast<float>(block.getCentreY());
+        float loudest = 0.0f, top = merge, bottom = merge;
+        for (size_t t = 0; t < sends.size(); ++t) {
+            const float amount = sendValues[t]->load(), y = sendY(t);
+            loudest = std::max(loudest, amount);
+            top = std::min(top, y);
+            bottom = std::max(bottom, y);
+            g.setColour(MensisLook::fg.withAlpha(0.12f + 0.88f * amount));
+            g.fillRect(lineStart(t), y - 0.75f, busX() - lineStart(t), 1.5f);
+        }
+        g.setColour(MensisLook::fg.withAlpha(0.12f + 0.88f * loudest));
+        g.fillRect(busX() - 0.75f, top, 1.5f, bottom - top);
+        g.fillRect(busX(), merge - 0.75f, intoX() - busX(), 1.5f);
+        juce::Path arrow;
+        arrow.addTriangle(intoX(), merge - 4.0f, intoX(), merge + 4.0f, intoX() + 6.0f, merge);
+        g.fillPath(arrow);
     }
 
     void resized() override {
         for (size_t t = 0; t < sends.size(); ++t)
             sends[t].setBounds(rows[t].withX(0).withWidth(kSendWidth).withSizeKeepingCentre(kSendWidth, std::min(rows[t].getHeight(), 96)));
-        auto area = controlsArea();
-        auto top = area.removeFromTop(kRowH), bottom = area.removeFromTop(kRowH);
+        auto block = knobBlock();
+        auto top = block.removeFromTop(kRowH), bottom = block.removeFromTop(kRowH);
         const int w = top.getWidth() / 4;
         for (size_t i = 0; i < 3; ++i) knobs[i].setBounds(top.removeFromLeft(w).withSizeKeepingCentre(64, 96));
         for (size_t i = 3; i < 6; ++i) knobs[i].setBounds(bottom.removeFromLeft(w).withSizeKeepingCentre(64, 96));
@@ -740,10 +805,21 @@ public:
 
 private:
     static constexpr int kSendWidth = 64, kRowH = 110;
-    juce::Rectangle<int> controlsArea() const { // two rows of knobs under the heading, right of the sends (like MOD)
-        return getLocalBounds().withTrimmedLeft(kSendWidth + 24).withTrimmedTop(40).withHeight(2 * kRowH);
+
+    // Two rows of knobs, centred in the panel, right of the bus.
+    juce::Rectangle<int> knobBlock() const {
+        const auto r = getLocalBounds().withTrimmedLeft(kSendWidth + 48);
+        return r.withSizeKeepingCentre(r.getWidth(), 2 * kRowH);
     }
+    float busX() const { return static_cast<float>(kSendWidth + 18); }
+    float intoX() const { return static_cast<float>(knobBlock().getX() - 10); }
+    float lineStart(size_t t) const { return static_cast<float>(sends[t].getRight()) - 4.0f; }
+    float sendY(size_t t) const { return static_cast<float>(sends[t].getBounds().getCentreY()) + 2.0f; } // the knob, not its label
+
+    void timerCallback() override { repaint(); } // line brightness follows the sends (knobs and automation)
+
     std::array<Knob, MensisProcessor::kNumTracks> sends;
+    std::array<std::atomic<float>*, MensisProcessor::kNumTracks> sendValues{};
     std::array<Knob, 6> knobs;
     juce::TextButton freeze;
     std::unique_ptr<juce::ButtonParameterAttachment> freezeAttachment;
