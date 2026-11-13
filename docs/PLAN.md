@@ -149,6 +149,8 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
   `mod1.depth` (..mod4). The target is saved in the plugin state (`mod1.target` = param ID), not a param.
   - LFO: phase = host beats / RATE (locked to Live). SHAPE morphs sine -> triangle -> saw -> square.
   - Random: a new seeded value every RATE (hash of seed, slot, step). SHAPE = smoothness (steps -> glides).
+  - RATE: SYNC on = note lengths incl. triplets (1/16T .. 8 bars), locked to Live; SYNC off = 0.02-20 Hz
+    (params `mod1.sync`, `mod1.hz`). Hz is turned into beats-per-cycle at the current tempo.
   - Env: follows the loudness of the target's track (the whole mix for global targets). RATE = release,
     SHAPE = sensitivity. Unipolar (0..1); LFO/Random are bipolar.
   - Applied as: normalised target value + DEPTH x mod, clamped. Recomputed every 128 samples

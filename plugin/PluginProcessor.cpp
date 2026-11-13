@@ -11,8 +11,10 @@ constexpr std::array<double, 4> kGridBeats{0.125, 0.25, 0.5, 1.0};
 const juce::StringArray kFeelNames{"Grid", "Loose", "Free"};
 const juce::StringArray kDelayNames{"1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/4T", "1/8D", "1/4", "1/4D", "1/2", "1 bar"};
 const juce::StringArray kModTypeNames{"LFO", "Random", "Env"};
-const juce::StringArray kModRateNames{"1/16", "1/8", "1/4", "1/2", "1 bar", "2 bars", "4 bars", "8 bars"};
-constexpr std::array<double, 8> kModRateBeats{0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0};
+const juce::StringArray kModRateNames{"1/16T", "1/16", "1/8T", "1/8", "1/4T", "1/4", "1/2T", "1/2",
+                                     "1 bar", "2 bars", "4 bars", "8 bars"};
+constexpr std::array<double, 12> kModRateBeats{1.0 / 6.0, 0.25, 1.0 / 3.0, 0.5, 2.0 / 3.0, 1.0, 4.0 / 3.0, 2.0,
+                                               4.0, 8.0, 16.0, 32.0};
 constexpr std::array<double, 12> kDelayBeats{0.125, 1.0 / 6.0, 0.25, 1.0 / 3.0, 0.375, 0.5, 2.0 / 3.0, 0.75, 1.0, 1.5, 2.0, 4.0};
 
 // Param IDs are stable: never rename once used in Live (automation and presets would break).
@@ -179,10 +181,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
         auto id = [m](const char* name) { return juce::ParameterID{"mod" + juce::String(m) + "." + name, 1}; };
         auto label = [m](const char* name) { return "Mod " + juce::String(m) + " " + name; };
         layout.add(std::make_unique<juce::AudioParameterChoice>(id("type"), label("Type"), kModTypeNames, 0),
-                   std::make_unique<juce::AudioParameterChoice>(id("rate"), label("Rate"), kModRateNames, 4),
+                   std::make_unique<juce::AudioParameterChoice>(id("rate"), label("Rate"), kModRateNames, 8),
                    std::make_unique<juce::AudioParameterFloat>(id("shape"), label("Shape"), juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f, pct),
                    std::make_unique<juce::AudioParameterFloat>(id("depth"), label("Depth"), juce::NormalisableRange<float>(-1.0f, 1.0f), 0.0f,
                        text([](float v, int) { return (v > 0.005f ? "+" : "") + juce::String(juce::roundToInt(v * 100.0f)) + "%"; })));
+        juce::NormalisableRange<float> hz(0.02f, 20.0f);
+        hz.setSkewForCentre(1.0f);
+        layout.add(std::make_unique<juce::AudioParameterBool>(id("sync"), label("Sync"), true),
+                   std::make_unique<juce::AudioParameterFloat>(id("hz"), label("Hz"), hz, 1.0f,
+                       text([](float v, int) { return juce::String(v, v < 1.0f ? 2 : 1) + " Hz"; })));
     }
     for (const auto& [mid, name] : {std::pair{"macro.destroy", "Destroy"}, std::pair{"macro.drift", "Drift"},
                                      std::pair{"macro.ring", "Ring"}, std::pair{"macro.space", "Space"}})
@@ -220,7 +227,7 @@ MensisProcessor::MensisProcessor()
     swingParam = params.getRawParameterValue("swing");
     for (size_t m = 0; m < kModSlots; ++m) {
         auto raw = [&](const char* name) { return params.getRawParameterValue("mod" + juce::String(m + 1) + "." + name); };
-        modParams[m] = {raw("type"), raw("rate"), raw("shape"), raw("depth")};
+        modParams[m] = {raw("type"), raw("rate"), raw("shape"), raw("depth"), raw("sync"), raw("hz")};
         modTargetIndex[m].store(-1);
     }
     macroParams = {params.getRawParameterValue("macro.destroy"), params.getRawParameterValue("macro.drift"),
@@ -351,7 +358,9 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 const int idx = modTargetIndex[m].load(std::memory_order_relaxed);
                 const auto& mp = modParams[m];
                 const mensis::ModParams params{static_cast<mensis::ModType>(static_cast<int>(mp.type->load())),
-                                               kModRateBeats[static_cast<size_t>(mp.rate->load())], mp.shape->load(),
+                                               mp.sync->load() > 0.5f ? kModRateBeats[static_cast<size_t>(mp.rate->load())]
+                                                                      : bpm / 60.0 / std::max(0.001f, mp.hz->load()), // Hz -> beats per cycle
+                                               mp.shape->load(),
                                                seedNew, static_cast<uint32_t>(m)};
                 const int track = idx >= 0 ? paramTrack[static_cast<size_t>(idx)] : -1;
                 const float level = track >= 0 ? trackLevel[static_cast<size_t>(track)] : mixLevel;

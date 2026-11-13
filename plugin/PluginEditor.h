@@ -846,6 +846,14 @@ public:
                 row.knobs[k].attach(*p.params.getParameter(prefix + ids[k].first), ids[k].second);
                 addAndMakeVisible(row.knobs[k]);
             }
+            row.hz.attach(*p.params.getParameter(prefix + "hz"), "RATE");
+            addChildComponent(row.hz);
+            row.sync.setButtonText("SYNC");
+            row.sync.setClickingTogglesState(true);
+            row.sync.setTooltip("On: RATE in note lengths, locked to Live. Off: RATE in Hz");
+            row.syncAttachment = std::make_unique<juce::ButtonParameterAttachment>(*p.params.getParameter(prefix + "sync"), row.sync);
+            addAndMakeVisible(row.sync);
+            row.syncParam = p.params.getRawParameterValue(prefix + "sync");
             row.map.setButtonText("MAP");
             row.map.setTooltip("Press, then touch any knob: it becomes this modulator's target");
             row.map.onClick = [this, m] { if (onMap) onMap(static_cast<int>(m)); };
@@ -892,6 +900,8 @@ public:
         for (size_t m = 0; m < rows.size(); ++m) {
             auto row = rowArea(m).withTrimmedLeft(28);
             for (auto& k : rows[m].knobs) k.setBounds(row.removeFromLeft(58).withSizeKeepingCentre(58, std::min(row.getHeight(), 92)));
+            rows[m].hz.setBounds(rows[m].knobs[1].getBounds()); // same spot: one shows, by SYNC
+            rows[m].sync.setBounds(rows[m].knobs[1].getBounds().withY(rows[m].knobs[1].getBottom() + 2).withHeight(18).reduced(6, 0));
             auto buttons = row.removeFromLeft(56).withSizeKeepingCentre(48, 50);
             rows[m].map.setBounds(buttons.removeFromTop(22));
             buttons.removeFromTop(6);
@@ -941,11 +951,23 @@ private:
             rows[m].target.setText(text, juce::dontSendNotification);
             rows[m].target.setColour(juce::Label::textColourId, id.isEmpty() && static_cast<int>(m) != armed ? MensisLook::mid : MensisLook::fg);
             rows[m].clear.setEnabled(id.isNotEmpty());
+            const bool synced = rows[m].syncParam->load() > 0.5f;
+            if (rows[m].knobs[1].isVisible() != synced) {
+                rows[m].knobs[1].setVisible(synced);
+                rows[m].hz.setVisible(!synced);
+            }
         }
         if (isShowing()) repaint();
     }
 
-    struct Row { std::array<Knob, 4> knobs; juce::TextButton map, clear; juce::Label target; };
+    struct Row {
+        std::array<Knob, 4> knobs; // TYPE, RATE (note lengths), SHAPE, DEPTH
+        Knob hz;                   // RATE in Hz, shown instead when SYNC is off
+        juce::TextButton map, clear, sync;
+        std::unique_ptr<juce::ButtonParameterAttachment> syncAttachment;
+        std::atomic<float>* syncParam = nullptr;
+        juce::Label target;
+    };
     MensisProcessor& proc;
     std::array<Knob, 4> macros;
     std::array<Row, MensisProcessor::kModSlots> rows;

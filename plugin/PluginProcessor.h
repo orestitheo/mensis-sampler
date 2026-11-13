@@ -146,7 +146,10 @@ private:
     std::atomic<float>* seedParam = nullptr;
     std::atomic<float>* masterDb = nullptr;
     std::atomic<float>* swingParam = nullptr;
-    struct ModSlotParams { std::atomic<float>* type; std::atomic<float>* rate; std::atomic<float>* shape; std::atomic<float>* depth; };
+    struct ModSlotParams {
+        std::atomic<float>* type; std::atomic<float>* rate; std::atomic<float>* shape; std::atomic<float>* depth;
+        std::atomic<float>* sync; std::atomic<float>* hz; // SYNC off: RATE in Hz instead of note lengths
+    };
     std::array<ModSlotParams, kModSlots> modParams{};
     std::array<std::atomic<float>*, 4> macroParams{};
     std::array<mensis::Modulator, kModSlots> modulators;

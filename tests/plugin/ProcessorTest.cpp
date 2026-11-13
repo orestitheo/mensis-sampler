@@ -59,7 +59,7 @@ TEST_CASE("a modulator mapped to PITCH moves the pitch") {
     for (double hz : steady) CHECK(std::abs(hz - 440.0) < 30.0);
 
     set(p, "mod1.type", 0.0f);   // LFO
-    set(p, "mod1.rate", 4.0f);   // 1 bar
+    set(p, "mod1.rate", 8.0f);   // 1 bar
     set(p, "mod1.depth", 0.25f); // +-25% of the PITCH range = +-12 st
     p.setModTarget(0, "t1.pitch");
     REQUIRE(p.getModTarget(0) == "t1.pitch");
@@ -143,4 +143,35 @@ TEST_CASE("scenes are saved with the set") {
     q.updateScenes();
     auto* chaos = q.params.getParameter("chaos");
     CHECK(std::abs(chaos->convertFrom0to1(chaos->getValue()) - 0.7f) < 1e-4f);
+}
+
+TEST_CASE("mod RATE: Hz when SYNC is off, triplets when it's on") {
+    juce::ScopedJuceInitialiser_GUI juce;
+    MensisProcessor p; // own 120 BPM clock
+    p.setRateAndBufferSizeDetails(kRate, 64);
+    p.prepareToPlay(kRate, 64);
+    set(p, "mod1.type", 0.0f); // LFO (sine)
+
+    // Sign changes of the LFO over 2 s: a sine crosses zero twice per cycle.
+    auto crossings = [&]() {
+        juce::AudioBuffer<float> buffer(2, 64);
+        juce::MidiBuffer midi;
+        int n = 0;
+        float prev = 0.0f;
+        for (int b = 0; b < static_cast<int>(2.0 * kRate / 64); ++b) {
+            p.processBlock(buffer, midi);
+            const float v = p.getModSignal(0);
+            if (b > 0 && (prev < 0.0f) != (v < 0.0f)) ++n;
+            prev = v;
+        }
+        return n;
+    };
+
+    p.params.getParameter("mod1.sync")->setValueNotifyingHost(0.0f);
+    set(p, "mod1.hz", 2.0f);
+    CHECK(std::abs(crossings() - 8) <= 1); // 2 Hz for 2 s = 4 cycles
+
+    p.params.getParameter("mod1.sync")->setValueNotifyingHost(1.0f);
+    set(p, "mod1.rate", 4.0f); // "1/4T": 2/3 beat = 1/3 s at 120 BPM -> 6 cycles in 2 s
+    CHECK(std::abs(crossings() - 12) <= 1);
 }
