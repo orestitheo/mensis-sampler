@@ -163,3 +163,17 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
   - SPACE: all sends up, size and feedback up.
   Applied after modulation, in real units, clamped to each knob's range. Pure function in core (tested).
 - UI: MOD page with the 4 macros and the 4 slots (each with a small live scope of its signal).
+
+## Section 9a notes: Scenes (inside Mensis)
+- 8 scene slots: snapshots of every knob and switch except master VOLUME. Samples and mod targets are
+  not in scenes. Saved with the Live set (by param ID, so new params later don't break old sets).
+- Click = recall at the next bar (immediately when Live is stopped). SAVE then click, or Shift-click,
+  stores the current sound. Alt-click clears a slot.
+- Timing: the audio thread switches to the scene's values exactly at the bar line (it splits the chunk
+  there) through an override layer; the message thread then writes the values into the real params
+  (so knobs and Live see them) and drops the override. A small state machine (idle / pending / active)
+  with atomics keeps the two threads from stepping on each other. A processor timer does the
+  message-thread part, so it works with the plugin window closed.
+- Modulation keeps working on top of a recalled scene.
+- UI: scene bar along the bottom: 8 buttons (dim = empty, outline = stored, filled = current,
+  blinking = waiting for the bar) + SAVE.

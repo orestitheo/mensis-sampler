@@ -7,12 +7,14 @@
 #include "core/engine/Space.h"
 #include "core/engine/Modulator.h"
 #include <optional>
+#include <unordered_map>
 
 // Thin host wrapper: reads host tempo/position and params, hands them to core/.
-class MensisProcessor final : public juce::AudioProcessor {
+class MensisProcessor final : public juce::AudioProcessor, private juce::Timer {
 public:
     static constexpr size_t kNumTracks = 4;
     static constexpr size_t kModSlots = 4;
+    static constexpr int kScenes = 8;
 
     MensisProcessor();
 
@@ -32,6 +34,15 @@ public:
     float getModSignal(size_t slot) const { return modSignal[slot].load(std::memory_order_relaxed); } // any thread
     // The modulated value (0..1) of a knob that is a mod target with non-zero depth, for drawing.
     std::optional<float> getModulatedValue(const juce::RangedAudioParameter& p) const;
+
+    // Scenes: snapshots of every knob except master volume. Message thread only.
+    void saveScene(int slot);
+    void recallScene(int slot); // takes over at the next bar (immediately when stopped)
+    void clearScene(int slot);
+    bool hasScene(int slot) const { return scenes[static_cast<size_t>(slot)].has_value(); }
+    int getCurrentScene() const { return currentScene; }
+    int getPendingScene() const; // waiting for the bar, -1 if none
+    void updateScenes();         // message thread, ~30x/s (own timer): finishes a recall the audio thread started
 
     // Grain cloud for drawing, any thread. env 0 = grain not playing; anchor -1 = cloud off.
     struct GrainDot { float x, env, pan; bool backwards; };
@@ -137,6 +148,18 @@ private:
     std::array<mensis::Modulator, kModSlots> modulators;
     std::array<std::atomic<int>, kModSlots> modTargetIndex{};
     std::array<std::atomic<float>, kModSlots> modSignal{}, modNorm{};
+    // Scenes. scenes[] belongs to the message thread. sceneNorm/sceneReal/sceneMask (sized once, in the
+    // constructor) carry one scene to the audio thread; sceneState says who may touch them:
+    // 0 idle, 1 pending (waiting for the bar), 2 active (audio uses the values), 3 message thread writing.
+    std::array<std::optional<std::vector<std::optional<float>>>, kScenes> scenes;
+    std::vector<float> sceneNorm, sceneReal;
+    std::vector<char> sceneMask;
+    std::atomic<int> sceneState{0};
+    int pendingSlot = -1, queuedSlot = -1, currentScene = -1; // message thread
+    void handOverScene();      // message thread: queued scene -> pending, when the audio thread allows
+    void timerCallback() override { updateScenes(); }
+    std::unordered_map<const std::atomic<float>*, int> rawIndex; // raw value -> allParams index (fixed)
+
     std::vector<juce::RangedAudioParameter*> allParams; // fixed after construction
     std::vector<std::atomic<float>*> allRaw;
     std::vector<int> paramTrack;

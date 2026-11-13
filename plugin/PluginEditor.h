@@ -852,6 +852,75 @@ private:
     int armed = -1;
 };
 
+// Scene bar: 8 snapshot slots. Click = recall on the next bar, SAVE+click or Shift-click = store,
+// Alt-click = clear. Dim = empty, outline = stored, filled = current, blinking = waiting for the bar.
+class SceneBar final : public juce::Component, private juce::Timer {
+public:
+    explicit SceneBar(MensisProcessor& p) : proc(p) {
+        save.setButtonText("SAVE");
+        save.setClickingTogglesState(true);
+        save.setTooltip("Then click a slot to store the current sound in it");
+        addAndMakeVisible(save);
+        startTimerHz(8);
+    }
+
+    void paint(juce::Graphics& g) override {
+        g.setColour(MensisLook::dim);
+        g.fillRect(0.0f, 0.0f, static_cast<float>(getWidth()), 1.0f);
+        g.setColour(MensisLook::fg);
+        g.setFont(MensisLook::font(13.0f, true));
+        g.drawText("S C E N E S", juce::Rectangle<int>(0, 0, kLabel, getHeight()), juce::Justification::centredLeft);
+        const int current = proc.getCurrentScene(), pending = proc.getPendingScene();
+        for (int s = 0; s < MensisProcessor::kScenes; ++s) {
+            const auto r = slotBounds(s).toFloat();
+            const bool stored = proc.hasScene(s), filled = s == current || (s == pending && blink);
+            g.setColour(filled ? MensisLook::fg : MensisLook::bg);
+            g.fillRect(r);
+            g.setColour(stored || s == pending ? MensisLook::fg : MensisLook::dim);
+            g.drawRect(r, 1.0f);
+            g.setColour(filled ? MensisLook::bg : stored ? MensisLook::fg : MensisLook::mid);
+            g.setFont(MensisLook::font(12.0f, true));
+            g.drawText(juce::String(s + 1), r, juce::Justification::centred);
+        }
+        g.setColour(MensisLook::mid);
+        g.setFont(MensisLook::font(10.0f));
+        g.drawText(save.getToggleState() ? "CLICK A SLOT TO SAVE INTO IT"
+                                         : "CLICK: PLAY ON NEXT BAR   SHIFT-CLICK: SAVE   ALT-CLICK: CLEAR",
+                   getLocalBounds().withTrimmedLeft(save.getRight() + 16), juce::Justification::centredLeft);
+    }
+
+    void resized() override {
+        save.setBounds(slotBounds(MensisProcessor::kScenes - 1).getRight() + 14, (getHeight() - 24) / 2, 60, 24);
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override {
+        for (int s = 0; s < MensisProcessor::kScenes; ++s) {
+            if (!slotBounds(s).contains(e.getPosition())) continue;
+            if (save.getToggleState() || e.mods.isShiftDown()) {
+                proc.saveScene(s);
+                save.setToggleState(false, juce::dontSendNotification);
+            } else if (e.mods.isAltDown()) {
+                proc.clearScene(s);
+            } else {
+                proc.recallScene(s);
+            }
+            repaint();
+        }
+    }
+
+private:
+    static constexpr int kLabel = 110;
+    juce::Rectangle<int> slotBounds(int s) const { return {kLabel + s * 46, (getHeight() - 26) / 2, 40, 26}; }
+    void timerCallback() override {
+        blink = !blink;
+        repaint();
+    }
+
+    MensisProcessor& proc;
+    juce::TextButton save;
+    bool blink = false;
+};
+
 class MensisEditor final : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget,
                            public juce::TextDragAndDropTarget, public KnobHost, private juce::Timer {
 public:
@@ -887,10 +956,11 @@ public:
         pages[0].setToggleState(true, juce::dontSendNotification);
         addChildComponent(spacePanel); // shown on the SPACE page
         addChildComponent(modPanel);   // shown on the MOD page
+        addAndMakeVisible(sceneBar);
         modPanel.onMap = [this](int slot) { arm(mapArmed == slot ? -1 : slot); };
 
         sendLookAndFeelChange(); // the strips were built before they had a parent; restyle their knob value boxes
-        setSize(1040, 840); // tall strips: room for a big waveform
+        setSize(1040, 884); // tall strips: room for a big waveform; scene bar at the bottom
         timerCallback();
         startTimerHz(30); // moves the playheads; also picks up samples restored from a saved Live set
     }
@@ -934,6 +1004,8 @@ public:
         for (auto& b : pages) b.setBounds(tabs.removeFromLeft(62).withTrimmedRight(4));
 
         auto area = getLocalBounds().reduced(20, 0).withTrimmedTop(kHeader).withTrimmedBottom(12);
+        sceneBar.setBounds(area.removeFromBottom(44));
+        area.removeFromBottom(6);
         const int h = area.getHeight() / static_cast<int>(MensisProcessor::kNumTracks);
         const auto stripsArea = area;
         for (auto& s : strips) s->setBounds(area.removeFromTop(h));
@@ -999,6 +1071,7 @@ private:
     std::array<juce::TextButton, 6> pages; // LOOP / GRAINS / RESO / COLOR / SPACE / MOD
     SpacePanel spacePanel{proc};
     ModPanel modPanel{proc};
+    SceneBar sceneBar{proc};
     int mapArmed = -1; // mod slot waiting for a knob to be touched
 
     void arm(int slot) {

@@ -211,9 +211,14 @@ MensisProcessor::MensisProcessor()
         if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(p)) {
             allParams.push_back(ranged);
             allRaw.push_back(params.getRawParameterValue(ranged->getParameterID()));
+            rawIndex[allRaw.back()] = static_cast<int>(allRaw.size() - 1);
             const auto pid = ranged->getParameterID();
             paramTrack.push_back(pid.startsWith("t") && pid[1] >= '1' && pid[1] <= '4' && pid[2] == '.' ? pid[1] - '1' : -1);
         }
+    sceneNorm.assign(allParams.size(), 0.0f);
+    sceneReal.assign(allParams.size(), 0.0f);
+    sceneMask.assign(allParams.size(), 0);
+    startTimerHz(30);
     for (size_t t = 0; t < kNumTracks; ++t) sendParams[t] = params.getRawParameterValue(paramId(t, "send"));
     spaceTime = params.getRawParameterValue("space.time");
     spaceFeedback = params.getRawParameterValue("space.feedback");
@@ -300,9 +305,25 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         // through its SEND, into the shared Space. The Space keeps running when Live stops, so tails ring out.
         const int chunk = std::min(trackBuf.getNumSamples(), 128);
         std::array<mensis::LoopParams, kNumTracks> lps;
-        for (int off = 0; off < numSamples; off += chunk) {
-            const int n = std::min(chunk, numSamples - off);
+        for (int off = 0, n = 0; off < numSamples; off += n) {
+            n = std::min(chunk, numSamples - off);
             const double chunkPpq = ppq + off * bpm / (60.0 * getSampleRate());
+
+            // A recalled scene takes over exactly at the next bar line (shortcut: 4/4): end this chunk there,
+            // so the next one starts on the bar. Stopped: right away.
+            if (sceneState.load(std::memory_order_acquire) == 1) {
+                const double nextBar = std::ceil(chunkPpq / 4.0 - 1e-9) * 4.0;
+                const double toBar = (nextBar - chunkPpq) * 60.0 / bpm * getSampleRate();
+                int expected = 1;
+                if (!playing || toBar < 1.0) sceneState.compare_exchange_strong(expected, 2, std::memory_order_acq_rel);
+                else if (toBar < n) n = static_cast<int>(std::ceil(toBar));
+            }
+            const bool sceneActive = sceneState.load(std::memory_order_acquire) == 2;
+            auto sceneIndex = [&](const std::atomic<float>* raw) {
+                if (!sceneActive) return -1;
+                const auto it = rawIndex.find(raw);
+                return it != rawIndex.end() && sceneMask[static_cast<size_t>(it->second)] ? it->second : -1;
+            };
 
             // Modulation: each slot moves its target's normalised value by DEPTH x signal.
             std::array<std::atomic<float>*, kModSlots> modRaw{};
@@ -319,14 +340,17 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 modSignal[m].store(v, std::memory_order_relaxed);
                 if (idx < 0) continue;
                 auto* target = allParams[static_cast<size_t>(idx)];
-                const float norm = std::clamp(target->getValue() + mp.depth->load() * v, 0.0f, 1.0f);
+                const bool fromScene = sceneActive && sceneMask[static_cast<size_t>(idx)];
+                const float base = fromScene ? sceneNorm[static_cast<size_t>(idx)] : target->getValue();
+                const float norm = std::clamp(base + mp.depth->load() * v, 0.0f, 1.0f);
                 modRaw[m] = allRaw[static_cast<size_t>(idx)];
                 modValue[m] = target->convertFrom0to1(norm);
                 modNorm[m].store(norm, std::memory_order_relaxed);
             }
-            auto val = [&](const std::atomic<float>* raw) { // knob value, or its modulated value
+            auto val = [&](const std::atomic<float>* raw) { // knob value, its scene value, or its modulated value
                 for (size_t m = 0; m < kModSlots; ++m)
                     if (modRaw[m] == raw) return modValue[m];
+                if (const int i = sceneIndex(raw); i >= 0) return sceneReal[static_cast<size_t>(i)];
                 return raw->load();
             };
 
@@ -458,6 +482,18 @@ void MensisProcessor::getStateInformation(juce::MemoryBlock& dest) {
         state.setProperty(paramId(t, "file"), getSampleFile(t).getFullPathName(), nullptr);
     for (size_t m = 0; m < kModSlots; ++m)
         state.setProperty("mod" + juce::String(m + 1) + ".target", getModTarget(m), nullptr);
+    state.removeChild(state.getChildWithName("SCENES"), nullptr);
+    juce::ValueTree sceneTree("SCENES");
+    for (int slot = 0; slot < kScenes; ++slot) {
+        if (!hasScene(slot)) continue;
+        juce::ValueTree scene("SCENE");
+        scene.setProperty("slot", slot, nullptr);
+        const auto& values = *scenes[static_cast<size_t>(slot)];
+        for (size_t i = 0; i < values.size(); ++i)
+            if (values[i]) scene.setProperty(allParams[i]->getParameterID(), *values[i], nullptr); // by ID: survives new params
+        sceneTree.appendChild(scene, nullptr);
+    }
+    state.appendChild(sceneTree, nullptr);
     if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
 }
 
@@ -473,6 +509,15 @@ void MensisProcessor::setStateInformation(const void* data, int sizeInBytes) {
     }
     for (size_t m = 0; m < kModSlots; ++m)
         setModTarget(m, state.getProperty("mod" + juce::String(m + 1) + ".target").toString());
+    for (auto& scene : scenes) scene.reset();
+    for (const auto& scene : state.getChildWithName("SCENES")) {
+        const int slot = scene.getProperty("slot", -1);
+        if (slot < 0 || slot >= kScenes) continue;
+        std::vector<std::optional<float>> values(allParams.size());
+        for (size_t i = 0; i < allParams.size(); ++i)
+            if (const auto* v = scene.getPropertyPointer(allParams[i]->getParameterID())) values[i] = static_cast<float>(*v);
+        scenes[static_cast<size_t>(slot)] = std::move(values);
+    }
 }
 
 void MensisProcessor::setModTarget(size_t slot, const juce::String& paramIdToTarget) {
@@ -494,6 +539,62 @@ std::optional<float> MensisProcessor::getModulatedValue(const juce::RangedAudioP
             return modNorm[m].load(std::memory_order_relaxed);
     }
     return std::nullopt;
+}
+
+void MensisProcessor::saveScene(int slot) {
+    std::vector<std::optional<float>> values(allParams.size());
+    for (size_t i = 0; i < allParams.size(); ++i)
+        if (allParams[i]->getParameterID() != "master") values[i] = allParams[i]->getValue(); // volume stays yours
+    scenes[static_cast<size_t>(slot)] = std::move(values);
+    currentScene = slot;
+}
+
+void MensisProcessor::clearScene(int slot) {
+    scenes[static_cast<size_t>(slot)].reset();
+    if (currentScene == slot) currentScene = -1;
+    if (queuedSlot == slot) queuedSlot = -1;
+}
+
+void MensisProcessor::recallScene(int slot) {
+    if (!hasScene(slot)) return;
+    queuedSlot = slot;
+    handOverScene();
+}
+
+int MensisProcessor::getPendingScene() const {
+    return queuedSlot >= 0 ? queuedSlot : sceneState.load() != 0 ? pendingSlot : -1;
+}
+
+void MensisProcessor::handOverScene() {
+    if (queuedSlot < 0) return;
+    // Write only while the audio thread isn't using the buffers: idle, or pending but not yet taken.
+    int expected = 0;
+    if (!sceneState.compare_exchange_strong(expected, 3, std::memory_order_acq_rel)) {
+        expected = 1;
+        if (!sceneState.compare_exchange_strong(expected, 3, std::memory_order_acq_rel)) return; // active: retry on the timer
+    }
+    const auto& values = *scenes[static_cast<size_t>(queuedSlot)];
+    for (size_t i = 0; i < allParams.size(); ++i) {
+        sceneMask[i] = values[i].has_value();
+        if (!values[i]) continue;
+        sceneNorm[i] = *values[i];
+        sceneReal[i] = allParams[i]->convertFrom0to1(*values[i]);
+    }
+    pendingSlot = queuedSlot;
+    queuedSlot = -1;
+    sceneState.store(1, std::memory_order_release);
+}
+
+void MensisProcessor::updateScenes() {
+    if (sceneState.load(std::memory_order_acquire) == 2) {
+        // The audio thread is already playing the scene; now make the knobs (and Live) show it too.
+        for (size_t i = 0; i < allParams.size(); ++i)
+            if (sceneMask[i] && allParams[i]->getValue() != sceneNorm[i]) allParams[i]->setValueNotifyingHost(sceneNorm[i]);
+        currentScene = pendingSlot;
+        pendingSlot = -1;
+        sceneState.store(0, std::memory_order_release);
+    }
+    handOverScene();
 }
 
 juce::AudioProcessorEditor* MensisProcessor::createEditor() { return new MensisEditor(*this); }
