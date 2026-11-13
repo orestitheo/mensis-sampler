@@ -462,9 +462,23 @@ void MensisProcessor::publishGrains(size_t track, const mensis::Sample* sample, 
     grainAnchor[track].store(on ? cloud.anchor(n) : -1.0f, std::memory_order_relaxed);
 }
 
+void MensisProcessor::restoreSample(size_t track, const juce::File& file, const juce::MemoryBlock* embedded) {
+    // The original file first (fast, and follows edits to it); else the copy saved in the set; else missing.
+    if (file != juce::File{} && file.existsAsFile() && loadSample(track, file, false)) return;
+    if (embedded != nullptr && embedded->getSize() > 0)
+        if (auto sample = mensis::loadSampleFromData(*embedded, file)) {
+            swapIn(track, std::move(sample));
+            missingPaths[track] = {};
+            return;
+        }
+    clearSample(track);
+    missingPaths[track] = file.getFullPathName(); // shown as MISSING; LOAD fixes it
+}
+
 bool MensisProcessor::loadSample(size_t track, const juce::File& file, bool fresh) {
     auto sample = mensis::loadSample(file);
     if (sample == nullptr) return false;
+    missingPaths[track] = {};
 
     if (fresh) {
         auto* slice = params.getParameter(paramId(track, "slice"));
@@ -481,7 +495,10 @@ bool MensisProcessor::loadSample(size_t track, const juce::File& file, bool fres
     return true;
 }
 
-void MensisProcessor::clearSample(size_t track) { swapIn(track, nullptr); }
+void MensisProcessor::clearSample(size_t track) {
+    swapIn(track, nullptr);
+    missingPaths[track] = {};
+}
 
 void MensisProcessor::swapIn(size_t track, std::unique_ptr<mensis::Sample> sample) {
     // The old sample may still be in use by the block that is running right now,
@@ -503,11 +520,26 @@ juce::File MensisProcessor::getSampleFile(size_t track) const {
     return ownedSamples[track] != nullptr ? ownedSamples[track]->file : juce::File{};
 }
 
+// Saved state: "MNS2" + a binary ValueTree (params, sample paths, mod targets, scenes, and each sample's file
+// bytes when small enough, so the set still works if the file moves). Older sets were plain XML.
+static constexpr char kStateMagic[4] = {'M', 'N', 'S', '2'};
+
 void MensisProcessor::getStateInformation(juce::MemoryBlock& dest) {
     auto state = params.copyState();
-    // shortcut: saves the file path, not the audio; if the file moves, the track loads empty
-    for (size_t t = 0; t < kNumTracks; ++t)
-        state.setProperty(paramId(t, "file"), getSampleFile(t).getFullPathName(), nullptr);
+    state.removeChild(state.getChildWithName("SAMPLES"), nullptr);
+    juce::ValueTree samples("SAMPLES");
+    for (size_t t = 0; t < kNumTracks; ++t) {
+        const auto* sample = ownedSamples[t].get();
+        // A missing sample keeps its path, so saving again doesn't forget where it was.
+        state.setProperty(paramId(t, "file"), sample != nullptr ? sample->file.getFullPathName() : missingPaths[t], nullptr);
+        if (sample != nullptr && sample->fileData.getSize() > 0) {
+            juce::ValueTree s("SAMPLE");
+            s.setProperty("track", static_cast<int>(t), nullptr);
+            s.setProperty("data", juce::var(sample->fileData), nullptr);
+            samples.appendChild(s, nullptr);
+        }
+    }
+    state.appendChild(samples, nullptr);
     for (size_t m = 0; m < kModSlots; ++m)
         state.setProperty("mod" + juce::String(m + 1) + ".target", getModTarget(m), nullptr);
     state.setProperty("uiScale", uiScale, nullptr);
@@ -523,18 +555,28 @@ void MensisProcessor::getStateInformation(juce::MemoryBlock& dest) {
         sceneTree.appendChild(scene, nullptr);
     }
     state.appendChild(sceneTree, nullptr);
-    if (auto xml = state.createXml()) copyXmlToBinary(*xml, dest);
+    juce::MemoryOutputStream out(dest, false);
+    out.write(kStateMagic, sizeof(kStateMagic));
+    state.writeToStream(out);
 }
 
 void MensisProcessor::setStateInformation(const void* data, int sizeInBytes) {
-    auto xml = getXmlFromBinary(data, sizeInBytes);
-    if (xml == nullptr || !xml->hasTagName(params.state.getType())) return;
-    auto state = juce::ValueTree::fromXml(*xml);
-    params.replaceState(state);
+    juce::ValueTree state;
+    if (sizeInBytes > 4 && std::memcmp(data, kStateMagic, sizeof(kStateMagic)) == 0)
+        state = juce::ValueTree::readFromData(static_cast<const char*>(data) + 4, static_cast<size_t>(sizeInBytes - 4));
+    else if (auto xml = getXmlFromBinary(data, sizeInBytes)) // sets saved before samples were embedded
+        state = juce::ValueTree::fromXml(*xml);
+    if (!state.hasType(params.state.getType())) return;
+
+    auto forParams = state.createCopy(); // the sample bytes don't belong in the live parameter tree
+    forParams.removeChild(forParams.getChildWithName("SAMPLES"), nullptr);
+    params.replaceState(forParams);
     for (size_t t = 0; t < kNumTracks; ++t) {
-        const auto path = state.getProperty(paramId(t, "file")).toString();
-        if (path.isNotEmpty()) loadSample(t, juce::File(path), false);
-        else clearSample(t);
+        const juce::File file(state.getProperty(paramId(t, "file")).toString());
+        const juce::MemoryBlock* embedded = nullptr;
+        for (const auto& s : state.getChildWithName("SAMPLES"))
+            if (static_cast<int>(s.getProperty("track", -1)) == static_cast<int>(t)) embedded = s.getProperty("data").getBinaryData();
+        restoreSample(t, file, embedded);
     }
     for (size_t m = 0; m < kModSlots; ++m)
         setModTarget(m, state.getProperty("mod" + juce::String(m + 1) + ".target").toString());

@@ -22,6 +22,8 @@ public:
     // sample at the current tempo, and turn SLICE on if it sounds like drums.
     bool loadSample(size_t track, const juce::File& file, bool fresh);
     void clearSample(size_t track);               // message thread only
+    // A sample the saved set pointed to that couldn't be found (and wasn't embedded); "" if none. Message thread.
+    juce::String getMissingSample(size_t track) const { return missingPaths[track]; }
     juce::File getSampleFile(size_t track) const; // message thread only
     const mensis::Sample* getSample(size_t track) const { return ownedSamples[track].get(); } // message thread only
     // 0..1 where the track is playing in its sample, -1 when stopped or empty. Any thread.
@@ -140,6 +142,8 @@ private:
     std::array<std::atomic<float>, kNumTracks> grainAnchor{};
     void publishGrains(size_t track, const mensis::Sample* sample, bool on);
     void swapIn(size_t track, std::unique_ptr<mensis::Sample> sample); // message thread
+    void restoreSample(size_t track, const juce::File& file, const juce::MemoryBlock* embedded); // message thread
+    std::array<juce::String, kNumTracks> missingPaths;
     std::atomic<float>* chaosAmount = nullptr;
     std::atomic<float>* chaosGrid = nullptr;
     std::atomic<float>* chaosFeel = nullptr;

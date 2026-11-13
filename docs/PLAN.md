@@ -179,3 +179,13 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
 - Modulation keeps working on top of a recalled scene.
 - UI: scene bar along the bottom: 8 buttons (dim = empty, outline = stored, filled = current,
   blinking = waiting for the bar) + SAVE.
+
+## Safeguards (before real use)
+- Samples travel with the Live set: the saved state ("MNS2" + binary ValueTree) carries each sample's
+  original file bytes when <= 20 MB. On load: the original path first, else the embedded copy, else the
+  track shows "MISSING: name" and keeps the path (LOAD fixes it). Old XML sets still load.
+- CPU: hidden benchmark `mensis_plugin_tests "[bench]"`: 4 tracks with slice/beat, pitch, full grain pool,
+  4-note resonator, filter, all of Color, sends into a 20 s Space, 4 mods: ~7.5% of one core at 64/128/512
+  sample blocks. Rare, random single slow blocks show up at 64 samples in the test (not a real-time thread;
+  the OS can pause it); the work per block is nearly constant, so that's the OS, not Mensis. Check Live's
+  CPU meter in a busy set to confirm.

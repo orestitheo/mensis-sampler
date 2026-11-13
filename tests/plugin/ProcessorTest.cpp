@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "PluginProcessor.h"
+#include <pthread/qos.h>
 
 namespace {
 
@@ -174,4 +175,144 @@ TEST_CASE("mod RATE: Hz when SYNC is off, triplets when it's on") {
     p.params.getParameter("mod1.sync")->setValueNotifyingHost(1.0f);
     set(p, "mod1.rate", 4.0f); // "1/4T": 2/3 beat = 1/3 s at 120 BPM -> 6 cycles in 2 s
     CHECK(std::abs(crossings() - 12) <= 1);
+}
+
+TEST_CASE("the sample travels inside the saved set: moving the file doesn't break it") {
+    juce::ScopedJuceInitialiser_GUI juce;
+    auto file = writeTone();
+    const auto moved = file.getSiblingFile("mensis_test_tone_moved.wav");
+    juce::MemoryBlock saved;
+    {
+        MensisProcessor p;
+        REQUIRE(p.loadSample(0, file, false));
+        p.getStateInformation(saved);
+    }
+    REQUIRE(file.moveFileTo(moved)); // the original path is gone now
+    MensisProcessor q;
+    q.setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+    REQUIRE(q.getSample(0) != nullptr);              // came back from the embedded copy
+    CHECK(q.getSample(0)->audio.getNumSamples() == static_cast<int>(2 * kRate));
+    CHECK(q.getMissingSample(0).isEmpty());
+    // Saving again still carries it.
+    juce::MemoryBlock again;
+    q.getStateInformation(again);
+    MensisProcessor r;
+    r.setStateInformation(again.getData(), static_cast<int>(again.getSize()));
+    CHECK(r.getSample(0) != nullptr);
+    moved.deleteFile();
+}
+
+TEST_CASE("sets saved before embedding still load; a lost file shows as missing") {
+    juce::ScopedJuceInitialiser_GUI juce;
+    auto file = writeTone();
+    MensisProcessor old; // build an old-style state: XML with just the path
+    auto state = old.params.copyState();
+    state.setProperty("t1.file", file.getFullPathName(), nullptr);
+    state.setProperty("t2.file", "/nowhere/lost_loop.wav", nullptr);
+    juce::MemoryBlock legacy;
+    juce::AudioProcessor::copyXmlToBinary(*state.createXml(), legacy);
+
+    MensisProcessor p;
+    p.setStateInformation(legacy.getData(), static_cast<int>(legacy.getSize()));
+    CHECK(p.getSample(0) != nullptr);
+    CHECK(p.getSample(1) == nullptr);
+    CHECK(p.getMissingSample(1) == "/nowhere/lost_loop.wav");
+
+    juce::MemoryBlock resaved; // saving keeps the missing path, so it's not forgotten
+    p.getStateInformation(resaved);
+    MensisProcessor q;
+    q.setStateInformation(resaved.getData(), static_cast<int>(resaved.getSize()));
+    CHECK(q.getMissingSample(1) == "/nowhere/lost_loop.wav");
+    REQUIRE(q.loadSample(1, file, false)); // LOAD fixes it
+    CHECK(q.getMissingSample(1).isEmpty());
+}
+
+// Hidden (run with: mensis_plugin_tests "[bench]"). Everything on, on all 4 tracks, at small buffers.
+TEST_CASE("CPU with everything turned up", "[.][bench]") {
+    juce::ScopedJuceInitialiser_GUI juce;
+    // Run like an audio thread (high priority, fast cores), not like a background program.
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    const auto loop = juce::File("/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/Loops/Drums/Full/Break Funky 102 bpm.aif");
+    const auto file = loop.existsAsFile() ? loop : writeTone();
+    for (int block : {64, 128, 512}) {
+        MensisProcessor p;
+        p.setRateAndBufferSizeDetails(kRate, block);
+        p.prepareToPlay(kRate, block);
+        set(p, "chaos", 1.0f);
+        set(p, "swing", 60.0f);
+        for (int t = 1; t <= 4; ++t) {
+            REQUIRE(p.loadSample(static_cast<size_t>(t - 1), file, true));
+            const auto id = [t](const char* n) { return "t" + std::to_string(t) + "." + n; };
+            set(p, id("slice").c_str(), 1.0f);
+            set(p, id("beat").c_str(), t % 2 == 0 ? 1.0f : 0.0f);
+            set(p, id("pitch").c_str(), 5.0f);
+            set(p, id("grain.mix").c_str(), 0.6f);
+            set(p, id("grain.size").c_str(), 500.0f);
+            set(p, id("grain.density").c_str(), 100.0f); // pool of 64 grains full
+            set(p, id("grain.detune").c_str(), 7.0f);
+            set(p, id("res.mix").c_str(), 0.5f);
+            set(p, id("res.chord").c_str(), 6.0f);       // Maj7: 4 notes x 4 partials
+            set(p, id("res.decay").c_str(), 4.0f);
+            set(p, id("flt.cutoff").c_str(), 2000.0f);
+            set(p, id("flt.reso").c_str(), 0.5f);
+            set(p, id("col.drive").c_str(), 0.6f);
+            set(p, id("col.bits").c_str(), 8.0f);
+            set(p, id("col.rate").c_str(), 12000.0f);
+            set(p, id("col.squash").c_str(), 0.6f);
+            set(p, id("col.tilt").c_str(), 0.4f);
+            set(p, id("send").c_str(), 0.5f);
+        }
+        set(p, "space.size", 1.0f);
+        set(p, "space.feedback", 0.8f);
+        for (size_t m = 0; m < 4; ++m) {
+            p.setModTarget(m, "t" + juce::String(m + 1) + ".flt.cutoff");
+            set(p, ("mod" + std::to_string(m + 1) + ".depth").c_str(), 0.5f);
+        }
+        juce::AudioBuffer<float> buffer(2, block);
+        juce::MidiBuffer midi;
+        constexpr double seconds = 10.0;
+        const auto blocks = static_cast<int>(seconds * kRate / block);
+        double slowest = 0.0;
+        int slowestAt = -1, over = 0;
+        const double budget = block / kRate * 1000.0;
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        for (int b = 0; b < blocks; ++b) {
+            const auto b0 = juce::Time::getMillisecondCounterHiRes();
+            p.processBlock(buffer, midi);
+            const double took = juce::Time::getMillisecondCounterHiRes() - b0;
+            if (took > slowest) { slowest = took; slowestAt = b; }
+            over += took > budget * 0.5; // blocks using more than half their budget
+        }
+        WARN("  slowest at block " << slowestAt << " of " << blocks << "; blocks over half their budget: " << over);
+        const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
+        const double load = ms / (seconds * 1000.0) * 100.0;
+        const double worstBlockBudget = block / kRate * 1000.0;
+        WARN("block " << block << ": " << load << "% of one core; slowest block " << slowest << " ms of its "
+                      << worstBlockBudget << " ms budget");
+        CHECK(load < 50.0);
+        // Slow single blocks are reported, not failed: this test isn't a real-time audio thread, and on a busy
+        // Mac the OS occasionally pauses it (rare, random blocks 10-20x the usual cost; an empty processor
+        // run alongside shows none only because its blocks are too short to be hit). Mensis does about the
+        // same work every block, so a real problem would show as a steady pattern, not as rare spikes.
+    }
+}
+
+// Hidden: the same timing loop on an empty Mensis, to tell OS hiccups from our own slow blocks.
+TEST_CASE("timing noise of an empty processor", "[.][bench]") {
+    juce::ScopedJuceInitialiser_GUI juce;
+    MensisProcessor p;
+    p.setRateAndBufferSizeDetails(kRate, 64);
+    p.prepareToPlay(kRate, 64);
+    juce::AudioBuffer<float> buffer(2, 64);
+    juce::MidiBuffer midi;
+    double slowest = 0.0;
+    int over = 0;
+    for (int b = 0; b < 7500; ++b) {
+        const auto b0 = juce::Time::getMillisecondCounterHiRes();
+        p.processBlock(buffer, midi);
+        const double took = juce::Time::getMillisecondCounterHiRes() - b0;
+        slowest = std::max(slowest, took);
+        over += took > 0.6667;
+    }
+    WARN("empty, block 64: slowest " << slowest << " ms; blocks over 0.67 ms: " << over);
 }

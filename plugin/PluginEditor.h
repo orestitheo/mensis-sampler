@@ -614,8 +614,12 @@ public:
     void refresh() {
         const auto file = proc.getSampleFile(track);
         const bool loaded = file != juce::File{};
-        name.setText(loaded ? file.getFileNameWithoutExtension() + "   " + barsText(proc.getBars(track)) : juce::String("empty"),
+        const auto missing = proc.getMissingSample(track);
+        name.setText(loaded ? file.getFileNameWithoutExtension() + "   " + barsText(proc.getBars(track))
+                     : missing.isNotEmpty() ? "MISSING: " + juce::File(missing).getFileName() + "  (LOAD to find it)"
+                                            : juce::String("empty"),
                      juce::dontSendNotification);
+        name.setColour(juce::Label::textColourId, missing.isNotEmpty() ? MensisLook::fg : MensisLook::mid);
         const float alpha = loaded ? 1.0f : 0.4f; // empty track: knobs dimmed (still usable, for setting up first)
         for (auto& k : knobs) k.setAlpha(alpha);
         for (auto& k : grainKnobs) k.setAlpha(alpha);
