@@ -824,8 +824,9 @@ private:
     int armed = -1;
 };
 
-// Scene bar: 8 snapshot slots. Click = recall on the next bar, SAVE+click or Shift-click = store,
-// Alt-click = clear. Dim = empty, outline = stored, filled = current, blinking = waiting for the bar.
+// Scene bar: 8 snapshot slots. Click = recall on the next bar (an empty slot: store), SAVE+click or
+// Shift-click = store, Alt-click = clear. Dim = empty, outline = stored, filled = current,
+// outline + dot = current but a knob has moved since, blinking = waiting for the bar.
 class SceneBar final : public juce::Component, private juce::Timer {
 public:
     explicit SceneBar(MensisProcessor& p) : proc(p) {
@@ -843,9 +844,10 @@ public:
         g.setFont(MensisLook::font(13.0f, true));
         g.drawText("S C E N E S", juce::Rectangle<int>(0, 0, kLabel, getHeight()), juce::Justification::centredLeft);
         const int current = proc.getCurrentScene(), pending = proc.getPendingScene();
+        const bool changed = proc.sceneChanged();
         for (int s = 0; s < MensisProcessor::kScenes; ++s) {
             const auto r = slotBounds(s).toFloat();
-            const bool stored = proc.hasScene(s), filled = s == current || (s == pending && blink);
+            const bool stored = proc.hasScene(s), filled = (s == current && !changed) || (s == pending && blink);
             g.setColour(filled ? MensisLook::fg : MensisLook::bg);
             g.fillRect(r);
             g.setColour(stored || s == pending ? MensisLook::fg : MensisLook::dim);
@@ -853,11 +855,12 @@ public:
             g.setColour(filled ? MensisLook::bg : stored ? MensisLook::fg : MensisLook::mid);
             g.setFont(MensisLook::font(12.0f, true));
             g.drawText(juce::String(s + 1), r, juce::Justification::centred);
+            if (s == current && changed && !filled) g.fillRect(r.getRight() - 8.0f, r.getY() + 4.0f, 4.0f, 4.0f);
         }
         g.setColour(MensisLook::mid);
         g.setFont(MensisLook::font(10.0f));
         g.drawText(save.getToggleState() ? "CLICK A SLOT TO SAVE INTO IT"
-                                         : "CLICK: PLAY ON NEXT BAR   SHIFT-CLICK: SAVE   ALT-CLICK: CLEAR",
+                                         : "CLICK: PLAY ON NEXT BAR, OR SAVE IF EMPTY   SHIFT: SAVE   ALT: CLEAR",
                    getLocalBounds().withTrimmedLeft(save.getRight() + 16), juce::Justification::centredLeft);
     }
 
@@ -868,11 +871,11 @@ public:
     void mouseDown(const juce::MouseEvent& e) override {
         for (int s = 0; s < MensisProcessor::kScenes; ++s) {
             if (!slotBounds(s).contains(e.getPosition())) continue;
-            if (save.getToggleState() || e.mods.isShiftDown()) {
+            if (e.mods.isAltDown() && !save.getToggleState()) {
+                proc.clearScene(s);
+            } else if (save.getToggleState() || e.mods.isShiftDown() || !proc.hasScene(s)) { // empty slot: a click stores
                 proc.saveScene(s);
                 save.setToggleState(false, juce::dontSendNotification);
-            } else if (e.mods.isAltDown()) {
-                proc.clearScene(s);
             } else {
                 proc.recallScene(s);
             }

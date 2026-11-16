@@ -521,6 +521,14 @@ void MensisProcessor::saveScene(int slot) {
     currentScene = slot;
 }
 
+bool MensisProcessor::sceneChanged() const {
+    if (currentScene < 0 || !hasScene(currentScene)) return false;
+    const auto& values = *scenes[static_cast<size_t>(currentScene)];
+    for (size_t i = 0; i < allParams.size(); ++i)
+        if (values[i] && std::abs(allParams[i]->getValue() - *values[i]) > 1e-4f) return true;
+    return false;
+}
+
 void MensisProcessor::clearScene(int slot) {
     scenes[static_cast<size_t>(slot)].reset();
     if (currentScene == slot) currentScene = -1;

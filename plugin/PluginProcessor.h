@@ -43,6 +43,7 @@ public:
     void clearScene(int slot);
     bool hasScene(int slot) const { return scenes[static_cast<size_t>(slot)].has_value(); }
     int getCurrentScene() const { return currentScene; }
+    bool sceneChanged() const; // a knob has moved away from the current scene
     int getPendingScene() const; // waiting for the bar, -1 if none
 
     // Window size as a scale of the design size; saved with the set. Message thread.

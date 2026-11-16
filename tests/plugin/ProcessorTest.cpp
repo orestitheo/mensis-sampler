@@ -381,3 +381,17 @@ TEST_CASE("the window opens at the size it was left at") {
     std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());
     CHECK(editor->getWidth() == 1248); // 1040 x 1.2
 }
+
+TEST_CASE("the current scene counts as changed once a knob moves away from it") {
+    juce::ScopedJuceInitialiser_GUI juce;
+    MensisProcessor p;
+    CHECK_FALSE(p.sceneChanged()); // no scene yet
+    p.saveScene(0);
+    CHECK_FALSE(p.sceneChanged());
+    set(p, "master", -12.0f); // volume is not part of scenes
+    CHECK_FALSE(p.sceneChanged());
+    set(p, "t1.level", -30.0f);
+    CHECK(p.sceneChanged());
+    set(p, "t1.level", -6.0f); // back where the scene has it
+    CHECK_FALSE(p.sceneChanged());
+}
