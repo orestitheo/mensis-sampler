@@ -31,6 +31,7 @@ float Space::readAt(const std::vector<float>& buf, int writePos, double delay) {
     const auto n = static_cast<int>(buf.size());
     double p = writePos - delay;
     p -= std::floor(p / n) * n;
+    if (p >= n) p = 0.0; // a tiny negative p rounds up to exactly n: one past the end
     const int i0 = static_cast<int>(p), i1 = (i0 + 1) % n;
     const auto frac = static_cast<float>(p - i0);
     return buf[static_cast<size_t>(i0)] + frac * (buf[static_cast<size_t>(i1)] - buf[static_cast<size_t>(i0)]);

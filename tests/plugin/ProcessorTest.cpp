@@ -316,3 +316,68 @@ TEST_CASE("timing noise of an empty processor", "[.][bench]") {
     }
     WARN("empty, block 64: slowest " << slowest << " ms; blocks over 0.67 ms: " << over);
 }
+
+namespace {
+struct LoopingHost final : juce::AudioPlayHead { // Live with its loop on: we move ppq ourselves
+    double ppq = 0.0;
+    juce::Optional<PositionInfo> getPosition() const override {
+        PositionInfo info;
+        info.setIsPlaying(true);
+        info.setBpm(120.0);
+        info.setPpqPosition(ppq);
+        return info;
+    }
+};
+} // namespace
+
+TEST_CASE("re-roll lands when Live's loop wraps before the bar line it waits for") {
+    juce::ScopedJuceInitialiser_GUI juce;
+    const auto tone = writeTone();
+    // Plays `blocks` blocks from ppq `from`; returns the left channel.
+    auto play = [](MensisProcessor& p, LoopingHost& host, double from, int blocks) {
+        juce::AudioBuffer<float> buffer(2, kBlock);
+        juce::MidiBuffer midi;
+        std::vector<float> out;
+        host.ppq = from;
+        for (int b = 0; b < blocks; ++b, host.ppq += kBlock * 120.0 / (60.0 * kRate)) {
+            p.processBlock(buffer, midi);
+            out.insert(out.end(), buffer.getReadPointer(0), buffer.getReadPointer(0) + kBlock);
+        }
+        return out;
+    };
+    auto make = [&](MensisProcessor& p, LoopingHost& host, float seed) {
+        p.setPlayHead(&host);
+        p.setRateAndBufferSizeDetails(kRate, kBlock);
+        p.prepareToPlay(kRate, kBlock);
+        REQUIRE(p.loadSample(0, tone, false));
+        set(p, "chaos", 1.0f);
+        set(p, "seed", seed);
+    };
+    LoopingHost hostA, hostB, hostC;
+    MensisProcessor a, b, c;
+    make(a, hostA, 1.0f);
+    play(a, hostA, 13.0, 20); // in bar 4 of a 4-bar loop
+    set(a, "seed", 2.0f);     // re-roll: waits for beat 16, which the loop never reaches
+    play(a, hostA, 13.5, 20);
+    const auto wrapped = play(a, hostA, 0.0, 100); // the loop wraps to bar 1
+
+    make(b, hostB, 2.0f);
+    const auto fresh = play(b, hostB, 0.0, 100);
+    make(c, hostC, 1.0f);
+    const auto old = play(c, hostC, 0.0, 100);
+    float diffNew = 0.0f, diffOld = 0.0f;
+    for (size_t i = 0; i < wrapped.size(); ++i) {
+        diffNew = std::max(diffNew, std::abs(wrapped[i] - fresh[i]));
+        diffOld = std::max(diffOld, std::abs(wrapped[i] - old[i]));
+    }
+    CHECK(diffNew < 1e-4f); // plays the new seed
+    CHECK(diffOld > 0.05f); // not the old one
+}
+
+TEST_CASE("the window opens at the size it was left at") {
+    juce::ScopedJuceInitialiser_GUI juce;
+    MensisProcessor p;
+    p.setUiScale(1.2);
+    std::unique_ptr<juce::AudioProcessorEditor> editor(p.createEditor());
+    CHECK(editor->getWidth() == 1248); // 1040 x 1.2
+}

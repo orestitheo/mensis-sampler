@@ -121,13 +121,14 @@ void MorphFilter::prepare(double newSampleRate) {
 }
 
 void MorphFilter::process(float& l, float& r, const FilterParams& p) {
+    const float fcTarget = std::clamp(p.cutoff, 20.0f, 20000.0f);
     if (!primed) {
-        cutoff.setCurrentAndTargetValue(p.cutoff);
+        cutoff.setCurrentAndTargetValue(fcTarget);
         reso.setCurrentAndTargetValue(p.reso);
         morph.setCurrentAndTargetValue(p.morph);
         primed = true;
     }
-    cutoff.setTargetValue(std::clamp(p.cutoff, 20.0f, 20000.0f));
+    cutoff.setTargetValue(fcTarget);
     reso.setTargetValue(p.reso);
     morph.setTargetValue(p.morph);
     if (p.isDefault() && !cutoff.isSmoothing() && !reso.isSmoothing() && !morph.isSmoothing()) {

@@ -1064,10 +1064,10 @@ public:
     explicit MensisEditor(MensisProcessor& p) : AudioProcessorEditor(p), proc(p), panel(p) {
         addAndMakeVisible(panel);
         constexpr double w = MensisPanel::kWidth, h = MensisPanel::kHeight;
+        const double scale = p.getUiScale(); // read first: setResizeLimits resizes the window, and resized() stores a new scale
         setResizable(true, true);
         setResizeLimits(juce::roundToInt(w * 0.6), juce::roundToInt(h * 0.6), juce::roundToInt(w * 1.6), juce::roundToInt(h * 1.6));
         getConstrainer()->setFixedAspectRatio(w / h);
-        const double scale = p.getUiScale();
         setSize(juce::roundToInt(w * scale), juce::roundToInt(h * scale)); // the size you left it at
     }
 

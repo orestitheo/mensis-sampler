@@ -173,7 +173,7 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     if (auto* playHead = getPlayHead())
         if (auto pos = playHead->getPosition()) {
             playing = pos->getIsPlaying();
-            if (auto b = pos->getBpm()) bpm = *b;
+            if (auto b = pos->getBpm(); b && *b > 0.0) bpm = *b; // 0 would divide by zero
             if (auto q = pos->getPpqPosition()) ppq = *q;
         }
     lastBpm.store(bpm);
@@ -186,6 +186,9 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     // Re-roll: a new seed takes over at the next bar line. Steps before it keep the old seed, so an event
     // already playing finishes cleanly.
     const auto wantSeed = static_cast<uint32_t>(seedParam->load());
+    // Live jumped back (its loop wrapped): the bar line a re-roll waits for may never come, and steps before
+    // it would bring the old seed back. So the new seed takes over now.
+    if (ppq < internalPpq - 0.01) seedOld = seedNew;
     if (!seedStarted) {
         seedOld = seedNew = wantSeed;
         seedStarted = true;
@@ -478,6 +481,7 @@ void MensisProcessor::setStateInformation(const void* data, int sizeInBytes) {
         setModTarget(m, state.getProperty("mod" + juce::String(m + 1) + ".target").toString());
     uiScale = std::clamp(static_cast<double>(state.getProperty("uiScale", 1.0)), 0.6, 1.6);
     for (auto& scene : scenes) scene.reset();
+    queuedSlot = currentScene = -1; // they pointed into the old scenes
     for (const auto& scene : state.getChildWithName("SCENES")) {
         const int slot = scene.getProperty("slot", -1);
         if (slot < 0 || slot >= kScenes) continue;

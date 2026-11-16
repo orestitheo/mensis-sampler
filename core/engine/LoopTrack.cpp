@@ -127,6 +127,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
 
         float l = 0.0f, r = 0.0f;
         const float level = gain.getNextValue();
+        const double pitch = pitchRatio.getNextValue(); // every sample, also in tape mode: the grain cloud follows it
         float g = level * chaos.gain * static_cast<float>(std::min(1.0, chaos.edgeBeats / fadeBeats));
         if (!p.warp) {
             l = read(srcL, pos);
@@ -136,7 +137,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
         } else if (beatsMode) {
             // Beats-style: the hit whose time it is plays from its start at its own speed (times Pitch).
             // It fades in over 1 ms; the hit before it fades out over 5 ms, so the switch doesn't click.
-            const double filePerPhase = secondsPerPhase * sample.sampleRate * pitchRatio.getNextValue();
+            const double filePerPhase = secondsPerPhase * sample.sampleRate * pitch;
             const auto idx = static_cast<size_t>(std::upper_bound(slicePhase.begin(), slicePhase.begin() + static_cast<std::ptrdiff_t>(numSlices), phase)
                                                  - slicePhase.begin()) - 1; // slicePhase[0] == 0, so idx >= 0
             // Real seconds since a hit started, given how far into it we are in straight (unswung) beats.
@@ -183,7 +184,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
         } else {
             const double t = real / beatsPerSample; // output time in samples since host beat 0
             const double k = std::floor(t / hop);
-            const double speed = srcSpeed * pitchRatio.getNextValue(); // grains read faster/slower = higher/lower
+            const double speed = srcSpeed * pitch; // grains read faster/slower = higher/lower
             for (double grain : {k, k - 1.0}) {
                 const double age = t - grain * hop; // 0 .. 2 * hop
                 const double w = std::sin(juce::MathConstants<double>::pi * age / (2.0 * hop));
@@ -200,7 +201,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
         r *= g;
         // Grain cloud: crossfade from the loop to the cloud. Chaos dips/dropouts only touch the loop.
         if (const float m = grainMix.getNextValue(); m > 0.0f) {
-            const auto [wl, wr] = cloud.next(sample, p.grains, real / beatsPerSample, pos, pitchRatio.getCurrentValue());
+            const auto [wl, wr] = cloud.next(sample, p.grains, real / beatsPerSample, pos, pitch);
             l = l * (1.0f - m) + wl * level * m;
             r = r * (1.0f - m) + wr * level * m;
         }
