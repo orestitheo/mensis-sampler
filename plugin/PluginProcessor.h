@@ -125,6 +125,10 @@ private:
         std::atomic<float>* colOut;
         std::atomic<float>* colMix;
         std::atomic<float>* beat;
+        std::atomic<float>* eqLow;
+        std::atomic<float>* eqMid;
+        std::atomic<float>* eqMidFreq;
+        std::atomic<float>* eqHigh;
     };
     std::array<TrackParams, kNumTracks> trackParams{};
     std::array<mensis::LoopTrack, kNumTracks> tracks;

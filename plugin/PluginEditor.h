@@ -441,13 +441,20 @@ public:
             colorKnobs[i].attach(*p.params.getParameter(id(colorIds[i].first)), colorIds[i].second);
             addChildComponent(colorKnobs[i]);
         }
+        const std::array<std::pair<const char*, const char*>, 4> eqIds{{{"eq.low", "LOW"}, {"eq.mid", "MID"},
+            {"eq.midfreq", "FREQ"}, {"eq.high", "HIGH"}}};
+        for (size_t i = 0; i < eqKnobs.size(); ++i) {
+            eqKnobs[i].attach(*p.params.getParameter(id(eqIds[i].first)), eqIds[i].second);
+            addChildComponent(eqKnobs[i]);
+        }
     }
 
-    // 0 = LOOP knobs, 1 = GRAINS knobs, 2 = RESONATOR + filter, 3 = COLOR. The waveform and track header stay.
+    // 0 = LOOP knobs, 1 = GRAINS knobs, 2 = RESONATOR, 3 = COLOR, 4 = filter + EQ. The waveform and track header stay.
     void setPage(int newPage) {
         page = newPage;
         repaint(); // group labels
-        for (auto& k : resKnobs) k.setVisible(page == 2);
+        for (size_t i = 0; i < resKnobs.size(); ++i) resKnobs[i].setVisible(page == (i < 5 ? 2 : 4)); // the last 3 are the filter
+        for (auto& k : eqKnobs) k.setVisible(page == 4);
         for (auto& k : colorKnobs) k.setVisible(page == 3);
         for (auto& k : knobs) k.setVisible(page == 0);
         for (auto& t : toggles) t.button.setVisible(page == 0);
@@ -469,6 +476,7 @@ public:
         for (auto& k : grainKnobs) k.setAlpha(alpha);
         for (auto& k : resKnobs) k.setAlpha(alpha);
         for (auto& k : colorKnobs) k.setAlpha(alpha);
+        for (auto& k : eqKnobs) k.setAlpha(alpha);
         for (auto& t : toggles) t.button.setAlpha(alpha);
         freeze.button.setAlpha(alpha);
         knobs[3].setEnabled(toggles[1].button.getToggleState()); // Pitch only works with Warp on
@@ -532,7 +540,7 @@ public:
     }
 
 private:
-    static constexpr int kPages = 4, kKnobW = 54, kButtonW = 64, kGap = 10, kHeaderH = 16;
+    static constexpr int kPages = 5, kKnobW = 54, kButtonW = 64, kGap = 10, kHeaderH = 16;
 
     struct Group { const char* name; std::vector<juce::Component*> knobs, buttons; };
     std::vector<Group> groupsFor(int pg) {
@@ -543,12 +551,13 @@ private:
                             {"OUT", {&knobs[4], &knobs[5]}, {}}};
             case 1: return {{"GRAIN", {&grainKnobs[0], &grainKnobs[1], &grainKnobs[2]}, {&freeze.button}},
                             {"SCATTER", {&grainKnobs[3], &grainKnobs[4], &grainKnobs[5], &grainKnobs[6]}, {}}};
-            case 2: return {{"RESONATOR", {&resKnobs[0], &resKnobs[1], &resKnobs[2], &resKnobs[3], &resKnobs[4]}, {}},
-                            {"FILTER", {&resKnobs[5], &resKnobs[6], &resKnobs[7]}, {}}};
+            case 2: return {{"RESONATOR", {&resKnobs[0], &resKnobs[1], &resKnobs[2], &resKnobs[3], &resKnobs[4]}, {}}};
             case 3: return {{"SATURATE", {&colorKnobs[0], &colorKnobs[1]}, {}},
                             {"CRUSH", {&colorKnobs[2], &colorKnobs[3]}, {}},
                             {"SHAPE", {&colorKnobs[4], &colorKnobs[5]}, {}},
                             {"OUT", {&colorKnobs[6], &colorKnobs[7]}, {}}};
+            case 4: return {{"FILTER", {&resKnobs[5], &resKnobs[6], &resKnobs[7]}, {}},
+                            {"EQ", {&eqKnobs[0], &eqKnobs[1], &eqKnobs[2], &eqKnobs[3]}, {}}};
             default: return {};
         }
     }
@@ -572,7 +581,8 @@ private:
     std::array<Knob, 7> knobs;
     std::array<Toggle, 4> toggles;
     std::array<Knob, 7> grainKnobs;
-    std::array<Knob, 8> resKnobs, colorKnobs;
+    std::array<Knob, 8> resKnobs, colorKnobs; // resKnobs: 5 resonator + 3 filter (shown on the EQ page)
+    std::array<Knob, 4> eqKnobs;
     Toggle freeze;
     juce::Label number;
     PlayButton play;
@@ -918,16 +928,16 @@ public:
         volume.attach(*p.params.getParameter("master"), "VOLUME");
         addAndMakeVisible(volume);
 
-        const std::array<const char*, 6> pageNames{"LOOP", "GRAINS", "RESO", "COLOR", "SPACE", "MOD"};
-        for (int i = 0; i < 6; ++i) {
+        const std::array<const char*, 7> pageNames{"LOOP", "GRAINS", "RESO", "COLOR", "EQ", "SPACE", "MOD"};
+        for (int i = 0; i < 7; ++i) {
             auto& b = pages[static_cast<size_t>(i)];
             b.setButtonText(pageNames[static_cast<size_t>(i)]);
             b.setRadioGroupId(1);
             b.setClickingTogglesState(true);
             b.onClick = [this, i] {
                 for (auto& s : strips) s->setPage(i);
-                spacePanel.setVisible(i == 4);
-                modPanel.setVisible(i == 5);
+                spacePanel.setVisible(i == 5);
+                modPanel.setVisible(i == 6);
             };
             addAndMakeVisible(b);
         }
@@ -978,7 +988,7 @@ public:
         volume.setBounds(head.removeFromRight(70)); // master, far right
         head.removeFromRight(20);
         for (size_t i = globalKnobs.size(); i-- > 0;) globalKnobs[i].setBounds(head.removeFromRight(i == 0 ? 76 : 60));
-        auto tabs = head.withTrimmedLeft(130).removeFromLeft(6 * 62).withSizeKeepingCentre(6 * 62, 24);
+        auto tabs = head.withTrimmedLeft(130).removeFromLeft(7 * 62).withSizeKeepingCentre(7 * 62, 24);
         for (auto& b : pages) b.setBounds(tabs.removeFromLeft(62).withTrimmedRight(4));
 
         auto area = getLocalBounds().reduced(20, 0).withTrimmedTop(kHeader).withTrimmedBottom(12);
@@ -1046,7 +1056,7 @@ private:
     std::array<std::unique_ptr<TrackStrip>, MensisProcessor::kNumTracks> strips;
     std::array<Knob, 5> globalKnobs;
     Knob volume;
-    std::array<juce::TextButton, 6> pages; // LOOP / GRAINS / RESO / COLOR / SPACE / MOD
+    std::array<juce::TextButton, 7> pages; // LOOP / GRAINS / RESO / COLOR / EQ / SPACE / MOD
     SpacePanel spacePanel{proc};
     ModPanel modPanel{proc};
     SceneBar sceneBar{proc};

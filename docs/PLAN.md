@@ -93,7 +93,7 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
 - Filter: state-variable filter (stable when swept). CUTOFF 20 Hz-20 kHz, RESO, MORPH sweeps
   low-pass -> band-pass -> high-pass. Defaults (LP, 20 kHz, no reso) = bypassed, bit-identical.
 - Params per track: `t1.res.mix`, `res.root`, `res.chord`, `res.decay`, `res.color`, `flt.cutoff`,
-  `flt.reso`, `flt.morph` (one Push bank of 8). UI: third page RESONATOR.
+  `flt.reso`, `flt.morph` (one Push bank of 8). UI: RESO page (resonator), EQ page (filter).
 
 ## Section 6 notes: Color
 - Per track, after Resonator/Filter: Drive -> Bits -> Rate -> Squash -> Tilt -> Output, with MIX (dry/wet).
@@ -189,3 +189,11 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
   sample blocks. Rare, random single slow blocks show up at 64 samples in the test (not a real-time thread;
   the OS can pause it); the work per block is nearly constant, so that's the OS, not Mensis. Check Live's
   CPU meter in a busy set to confirm.
+
+## Track EQ notes
+- Per track, last in the chain (after Color): low shelf at 150 Hz, mid bell (FREQ 200 Hz..8 kHz), high shelf
+  at 6 kHz. Each band -12..+12 dB. All at 0 dB = bypassed, bit-identical. Same filter form as the morph filter.
+- Params per track: `t1.eq.low`, `eq.mid`, `eq.midfreq`, `eq.high`. They sit at the end of the param list,
+  so the older params keep their order.
+- UI: EQ page, with the morph filter's three knobs moved here from the RESO page (their IDs are unchanged).
+- Not in Mensis FX yet.

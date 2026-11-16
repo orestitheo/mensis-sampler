@@ -117,6 +117,21 @@ inline void addColorParams(Layout& layout, const juce::String& idPrefix, const j
                std::make_unique<juce::AudioParameterFloat>(id("col.mix"), label("Color Mix"), juce::NormalisableRange<float>(0.0f, 1.0f), 1.0f, pct));
 }
 
+// Track EQ: 4 params.
+inline void addEqParams(Layout& layout, const juce::String& idPrefix, const juce::String& labelPrefix) {
+    auto id = [&](const char* name) { return juce::ParameterID{idPrefix + name, 1}; };
+    auto label = [&](const char* name) { return labelPrefix + "EQ " + name; };
+    const auto gain = text([](float v, int) { return (v > 0.05f ? "+" : "") + juce::String(v, 1) + " dB"; });
+    const juce::NormalisableRange<float> db(-12.0f, 12.0f, 0.1f);
+    juce::NormalisableRange<float> freq(200.0f, 8000.0f);
+    freq.setSkewForCentre(1000.0f);
+    layout.add(std::make_unique<juce::AudioParameterFloat>(id("eq.low"), label("Low"), db, 0.0f, gain),
+               std::make_unique<juce::AudioParameterFloat>(id("eq.mid"), label("Mid"), db, 0.0f, gain),
+               std::make_unique<juce::AudioParameterFloat>(id("eq.midfreq"), label("Mid Freq"), freq, 1000.0f,
+                   text([](float v, int) { return v < 1000.0f ? juce::String(juce::roundToInt(v)) + " Hz" : juce::String(v / 1000.0f, 1) + " kHz"; })),
+               std::make_unique<juce::AudioParameterFloat>(id("eq.high"), label("High"), db, 0.0f, gain));
+}
+
 // The Space settings (7 params, no prefix: Space is one shared unit in both plugins).
 inline void addSpaceParams(Layout& layout) {
     const auto pct = percentText();

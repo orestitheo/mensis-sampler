@@ -9,6 +9,7 @@ target_sources(mensis_core INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/engine/Grains.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/engine/Resonator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/engine/Color.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/engine/Eq.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/engine/Space.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/engine/Modulator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/engine/FxRack.cpp)

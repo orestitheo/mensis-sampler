@@ -17,6 +17,7 @@ static int usage() {
                  "                  [--cutoff 20000] [--reso 0] [--morph 0]\n"
                  "                  [--drive 0] [--char 0] [--bits 16] [--crush-rate 48000] [--squash 0] [--tilt 0]\n"
                  "                  [--color-out 0] [--color-mix 1]\n"
+                 "                  [--eq-low 0] [--eq-mid 0] [--eq-mid-freq 1000] [--eq-high 0]\n"
                  "                  [--send 0] [--space-time 0.75] [--space-feedback 0.4] [--space-blend 0.5]\n"
                  "                  [--space-size 0.5] [--space-tone 0.5]   (space: the track sent into the shared Space)\n";
     return 1;
@@ -54,6 +55,7 @@ int main(int argc, char* argv[]) {
         {"--cutoff", "20000"}, {"--reso", "0"}, {"--morph", "0"},
         {"--drive", "0"}, {"--char", "0"}, {"--bits", "16"}, {"--crush-rate", "48000"}, {"--squash", "0"}, {"--tilt", "0"},
         {"--color-out", "0"}, {"--color-mix", "1"},
+        {"--eq-low", "0"}, {"--eq-mid", "0"}, {"--eq-mid-freq", "1000"}, {"--eq-high", "0"},
         {"--send", "0"}, {"--space-time", "0.75"}, {"--space-feedback", "0.4"}, {"--space-blend", "0.5"},
         {"--space-size", "0.5"}, {"--space-tone", "0.5"}, {"--rate", "48000"}, {"--out", ""}};
     for (int i = 3; i + 1 < argc; i += 2) {
@@ -94,6 +96,7 @@ int main(int argc, char* argv[]) {
     params.filter = {static_cast<float>(num("--cutoff")), static_cast<float>(num("--reso")), static_cast<float>(num("--morph"))};
     auto f = [&](const char* key) { return static_cast<float>(num(key)); };
     params.color = {f("--drive"), f("--char"), f("--bits"), f("--crush-rate"), f("--squash"), f("--tilt"), f("--color-out"), f("--color-mix")};
+    params.eq = {f("--eq-low"), f("--eq-mid"), f("--eq-mid-freq"), f("--eq-high")};
     mensis::LoopTrack track;
     track.prepare(rate);
     juce::AudioBuffer<float> out(2, static_cast<int>(seconds * rate));

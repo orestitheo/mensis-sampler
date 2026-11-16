@@ -1,6 +1,7 @@
 #pragma once
 #include "Chaos.h"
 #include "Color.h"
+#include "Eq.h"
 #include "Grains.h"
 #include "Resonator.h"
 #include "Sample.h"
@@ -25,6 +26,7 @@ struct LoopParams {
     ResonatorParams res;   // mix 0 = off
     FilterParams filter;   // defaults = open (bypassed)
     ColorParams color;     // defaults = neutral (bypassed)
+    EqParams eq;           // defaults = flat (bypassed); last in the track
 };
 
 // One looping track. The play position comes straight from the host's beat position,
@@ -51,6 +53,7 @@ private:
     Resonator resonator;
     MorphFilter filter;
     Color color;
+    Eq eq;
 
     // The hits inside the loop region, rebuilt each block (fixed size: no allocation on the audio thread).
     // shortcut: max 512 hits per loop region; later ones are ignored

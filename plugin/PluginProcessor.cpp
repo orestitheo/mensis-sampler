@@ -95,6 +95,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
     for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) // BEAT mode Chaos for sliced tracks
         layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{paramId(t, "beat"), 1},
                                                               "T" + juce::String(t + 1) + " Beat", false));
+    for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) // new params go at the end, so the old ones keep their order
+        addEqParams(layout, paramId(t, ""), "T" + juce::String(t + 1) + " ");
     return layout;
 }
 
@@ -111,7 +113,8 @@ MensisProcessor::MensisProcessor()
                           raw("res.mix"), raw("res.root"), raw("res.chord"), raw("res.decay"), raw("res.color"),
                           raw("flt.cutoff"), raw("flt.reso"), raw("flt.morph"),
                           raw("col.drive"), raw("col.char"), raw("col.bits"), raw("col.rate"), raw("col.squash"),
-                          raw("col.tilt"), raw("col.out"), raw("col.mix"), raw("beat")};
+                          raw("col.tilt"), raw("col.out"), raw("col.mix"), raw("beat"),
+                          raw("eq.low"), raw("eq.mid"), raw("eq.midfreq"), raw("eq.high")};
         playPos[t].store(-1.0f);
         grainAnchor[t].store(-1.0f);
     }
@@ -302,6 +305,7 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 lp.filter = {val(tp.fltCutoff), val(tp.fltReso), val(tp.fltMorph)};
                 lp.color = {val(tp.colDrive), val(tp.colChar), val(tp.colBits), val(tp.colRate),
                             val(tp.colSquash), val(tp.colTilt), val(tp.colOut), val(tp.colMix)};
+                lp.eq = {val(tp.eqLow), val(tp.eqMid), val(tp.eqMidFreq), val(tp.eqHigh)};
                 lp.grains = {val(tp.grainMix), val(tp.grainSize), val(tp.grainDensity), val(tp.grainSpray),
                              val(tp.grainDetune), val(tp.grainReverse), val(tp.grainWidth),
                              val(tp.grainFreeze) > 0.5f, lp.chaos.amount, seedNew, static_cast<uint32_t>(t)};
