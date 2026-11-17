@@ -3,6 +3,8 @@
 A self-playing sampler plugin (VST3 + AU) for Ableton Live, inspired by the Torso S-4.
 4 tracks; each loops a sample in sync with Live. See `docs/PLAN.md`.
 
+![Mensis Sampler](docs/screenshot.png)
+
 ## Build (macOS)
 ```bash
 brew install cmake ninja
