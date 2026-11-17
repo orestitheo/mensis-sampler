@@ -415,3 +415,41 @@ TEST_CASE("Env FOLLOW: listens to another track (sidechain)") {
     CHECK(envAfter(1.0f) > 0.1f);  // FOLLOW T1: hears the tone
     CHECK(envAfter(0.0f) < 0.05f); // SELF: hears silent T2
 }
+
+TEST_CASE("a scene takes over on the next bar at a tempo where bars aren't whole samples") {
+    juce::ScopedJuceInitialiser_GUI juce;
+    struct Clock final : juce::AudioPlayHead { // fake Live: 123 BPM, one bar = 93658.5 samples
+        double ppq = 0.0;
+        juce::Optional<PositionInfo> getPosition() const override {
+            PositionInfo info;
+            info.setIsPlaying(true);
+            info.setBpm(123.0);
+            info.setPpqPosition(ppq);
+            return info;
+        }
+    } clock;
+    MensisProcessor p;
+    p.setPlayHead(&clock);
+    p.setRateAndBufferSizeDetails(kRate, kBlock);
+    p.prepareToPlay(kRate, kBlock);
+    set(p, "t1.level", -6.0f);
+    p.saveScene(0);
+    set(p, "t1.level", -30.0f);
+
+    juce::AudioBuffer<float> buffer(2, kBlock);
+    juce::MidiBuffer midi;
+    auto run = [&](int blocks) {
+        for (int b = 0; b < blocks; ++b) {
+            p.processBlock(buffer, midi);
+            clock.ppq += kBlock * 123.0 / (60.0 * kRate);
+        }
+    };
+    run(10);
+    p.recallScene(0);
+    run(150); // before the bar line: still waiting
+    p.updateScenes();
+    CHECK(p.getPendingScene() == 0);
+    run(40); // past the bar line at 93658.5 samples (block 183), but well before the next one
+    p.updateScenes();
+    CHECK(p.getPendingScene() == -1); // taken over on this bar, not a later one
+}

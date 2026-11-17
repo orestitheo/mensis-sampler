@@ -248,7 +248,7 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 const double toBar = (nextBar - chunkPpq) * 60.0 / bpm * getSampleRate();
                 int expected = 1;
                 if (!playing || toBar < 1.0) sceneState.compare_exchange_strong(expected, 2, std::memory_order_acq_rel);
-                else if (toBar < n) n = static_cast<int>(std::ceil(toBar));
+                else if (toBar < n) n = static_cast<int>(toBar); // round down: the next chunk starts <1 sample before the bar and takes it. Rounding up landed just past it and waited a whole bar more
             }
             const bool sceneActive = sceneState.load(std::memory_order_acquire) == 2;
             auto sceneIndex = [&](const std::atomic<float>* raw) {
