@@ -24,6 +24,7 @@ dirt and space.
 - **Space:** one shared delay + reverb with a send per track, and Freeze.
 - **Mod:** 4 modulators (LFO, Random, Envelope follower with sidechain) that you map by touching any
   knob, plus 4 macros: Destroy, Drift, Ring, Space.
+- **Play, Mute, Solo** per track. Play starts and stops a track on the next bar.
 - **Scenes:** 8 snapshots of all knobs. Click one and it takes over at the next bar.
 - **Saved with the Live set**, including the samples themselves (up to 20 MB each), so sets still
   open on another machine.

@@ -357,14 +357,16 @@ private:
     float downStart = 0.0f, downEnd = 1.0f, downX = 0.0f;
 };
 
-// Play button: white box with a black triangle when the track plays, dim outline when it's off.
+// Play button: white box with a black triangle when the track plays, dim outline when it's off,
+// blinking while it waits for the next bar to switch.
 class PlayButton final : public juce::Button {
 public:
     PlayButton() : juce::Button("Play") { setClickingTogglesState(true); }
+    bool waiting = false;
 
     void paintButton(juce::Graphics& g, bool over, bool) override {
         const auto box = getLocalBounds().toFloat().reduced(0.5f);
-        const bool on = getToggleState();
+        const bool on = waiting ? juce::Time::getMillisecondCounter() / 250 % 2 == 0 : getToggleState();
         g.setColour(on ? MensisLook::fg : over ? MensisLook::fg.withAlpha(0.12f) : MensisLook::bg);
         g.fillRect(box);
         g.setColour(on ? MensisLook::fg : MensisLook::mid);
@@ -393,10 +395,14 @@ public:
         // Track number = on/off button (like Live's track activator): lit = playing.
         number.setText(juce::String(t + 1), juce::dontSendNotification);
         number.setFont(MensisLook::font(22.0f, true));
-        play.setTooltip("Play / mute this track");
+        play.setTooltip("Play / stop this track (switches on the next bar)");
         playAttachment = std::make_unique<juce::ButtonParameterAttachment>(*p.params.getParameter(id("on")), play);
         addAndMakeVisible(number);
         addAndMakeVisible(play);
+        attachToggle(mute, "mute", "M");
+        attachToggle(solo, "solo", "S");
+        mute.button.setTooltip("Mute (instant)");
+        solo.button.setTooltip("Solo: only soloed tracks play");
         name.setFont(MensisLook::font(12.0f));
         name.setColour(juce::Label::textColourId, MensisLook::mid);
         load.setButtonText("LOAD");
@@ -482,8 +488,12 @@ public:
         knobs[3].setEnabled(toggles[1].button.getToggleState()); // Pitch only works with Warp on
         toggles[3].button.setEnabled(toggles[2].button.getToggleState()); // BEAT needs SLICE
         remove.setEnabled(loaded);
-        wave.setAlpha(play.getToggleState() ? 1.0f : 0.3f); // muted tracks fade back
-        number.setColour(juce::Label::textColourId, play.getToggleState() ? MensisLook::fg : MensisLook::mid);
+        const bool waiting = play.getToggleState() != proc.isTrackOn(track);
+        if (waiting || waiting != play.waiting) play.repaint();
+        play.waiting = waiting;
+        const bool audible = proc.isTrackAudible(track);
+        wave.setAlpha(audible ? 1.0f : 0.3f); // silent tracks fade back
+        number.setColour(juce::Label::textColourId, audible ? MensisLook::fg : MensisLook::mid);
         wave.repaint();
     }
 
@@ -505,6 +515,8 @@ public:
         auto head = area.removeFromTop(24);
         number.setBounds(head.removeFromLeft(26));
         play.setBounds(head.removeFromLeft(28).reduced(2, 1));
+        mute.button.setBounds(head.removeFromLeft(26).reduced(1, 1));
+        solo.button.setBounds(head.removeFromLeft(26).reduced(1, 1));
         head.removeFromLeft(8);
         load.setBounds(head.removeFromLeft(56).reduced(0, 2));
         head.removeFromLeft(4);
@@ -583,7 +595,7 @@ private:
     std::array<Knob, 7> grainKnobs;
     std::array<Knob, 8> resKnobs, colorKnobs; // resKnobs: 5 resonator + 3 filter (shown on the EQ page)
     std::array<Knob, 4> eqKnobs;
-    Toggle freeze;
+    Toggle freeze, mute, solo;
     juce::Label number;
     PlayButton play;
     std::unique_ptr<juce::ButtonParameterAttachment> playAttachment;

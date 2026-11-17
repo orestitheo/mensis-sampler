@@ -101,6 +101,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
     for (size_t m = 1; m <= MensisProcessor::kModSlots; ++m) // what an Env mod listens to (sidechain)
         layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"mod" + juce::String(m) + ".follow", 1},
                                                                 "Mod " + juce::String(m) + " Follow", kModFollowNames, 0));
+    for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) { // instant, unlike PLAY which waits for the bar
+        const auto name = "T" + juce::String(t + 1) + " ";
+        layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{paramId(t, "mute"), 1}, name + "Mute", false),
+                   std::make_unique<juce::AudioParameterBool>(juce::ParameterID{paramId(t, "solo"), 1}, name + "Solo", false));
+    }
     return layout;
 }
 
@@ -118,8 +123,9 @@ MensisProcessor::MensisProcessor()
                           raw("flt.cutoff"), raw("flt.reso"), raw("flt.morph"),
                           raw("col.drive"), raw("col.char"), raw("col.bits"), raw("col.rate"), raw("col.squash"),
                           raw("col.tilt"), raw("col.out"), raw("col.mix"), raw("beat"),
-                          raw("eq.low"), raw("eq.mid"), raw("eq.midfreq"), raw("eq.high")};
+                          raw("eq.low"), raw("eq.mid"), raw("eq.midfreq"), raw("eq.high"), raw("mute"), raw("solo")};
         playPos[t].store(-1.0f);
+        trackOn[t].store(trackParams[t].on->load() > 0.5f);
         grainAnchor[t].store(-1.0f);
     }
     chaosAmount = params.getRawParameterValue("chaos");
@@ -168,6 +174,13 @@ void MensisProcessor::prepareToPlay(double sampleRate, int maxBlock) {
     for (auto& m : modulators) m.reset();
     masterGain.reset(sampleRate, 0.05); // 50 ms glide: no zipper noise or clicks
     masterGain.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(masterDb->load(), -60.0f));
+    for (size_t t = 0; t < kNumTracks; ++t) trackOn[t].store(trackParams[t].on->load() > 0.5f); // a loaded set starts as saved
+}
+
+bool MensisProcessor::isTrackAudible(size_t track) const {
+    bool anySolo = false;
+    for (const auto& tp : trackParams) anySolo = anySolo || tp.solo->load() > 0.5f;
+    return isTrackOn(track) && trackParams[track].mute->load() < 0.5f && (!anySolo || trackParams[track].solo->load() > 0.5f);
 }
 
 void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) {
@@ -241,14 +254,15 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             n = std::min(chunk, numSamples - off);
             const double chunkPpq = ppq + off * bpm / (60.0 * getSampleRate());
 
-            // A recalled scene takes over exactly at the next bar line (shortcut: 4/4): end this chunk there,
-            // so the next one starts on the bar. Stopped: right away.
-            if (sceneState.load(std::memory_order_acquire) == 1) {
-                const double nextBar = std::ceil(chunkPpq / 4.0 - 1e-9) * 4.0;
-                const double toBar = (nextBar - chunkPpq) * 60.0 / bpm * getSampleRate();
+            // Chunks end on bar lines (shortcut: 4/4), so a chunk either starts on a bar or holds none.
+            // Recalled scenes and PLAY switch at the start of a bar chunk. Stopped: right away.
+            const double nextBar = std::ceil(chunkPpq / 4.0 - 1e-9) * 4.0;
+            const double toBar = (nextBar - chunkPpq) * 60.0 / bpm * getSampleRate();
+            const bool atBar = !playing || toBar < 1.0;
+            if (!atBar && toBar < n) n = static_cast<int>(toBar); // round down: the next chunk starts <1 sample before the bar and takes it. Rounding up landed just past it and waited a whole bar more
+            if (atBar && sceneState.load(std::memory_order_acquire) == 1) {
                 int expected = 1;
-                if (!playing || toBar < 1.0) sceneState.compare_exchange_strong(expected, 2, std::memory_order_acq_rel);
-                else if (toBar < n) n = static_cast<int>(toBar); // round down: the next chunk starts <1 sample before the bar and takes it. Rounding up landed just past it and waited a whole bar more
+                sceneState.compare_exchange_strong(expected, 2, std::memory_order_acq_rel);
             }
             const bool sceneActive = sceneState.load(std::memory_order_acquire) == 2;
             auto sceneIndex = [&](const std::atomic<float>* raw) {
@@ -293,6 +307,8 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             chaos.gridBeats = kGridBeats[static_cast<size_t>(val(chaosGrid))];
             const auto feel = static_cast<int>(val(chaosFeel));
             const mensis::Macros macros{val(macroParams[0]), val(macroParams[1]), val(macroParams[2]), val(macroParams[3])};
+            bool anySolo = false;
+            for (const auto& tp : trackParams) anySolo = anySolo || val(tp.solo) > 0.5f;
             for (size_t t = 0; t < kNumTracks; ++t) {
                 const auto& tp = trackParams[t];
                 auto& lp = lps[t];
@@ -305,7 +321,8 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                 lp.slice = val(tp.slice) > 0.5f;
                 lp.beat = val(tp.beat) > 0.5f;
                 lp.swing = (val(swingParam) - 50.0f) / 50.0f; // 50% = straight, 75% = 0.5
-                lp.on = val(tp.on) > 0.5f;
+                if (atBar) trackOn[t].store(val(tp.on) > 0.5f, std::memory_order_relaxed);
+                lp.on = trackOn[t].load(std::memory_order_relaxed) && val(tp.mute) < 0.5f && (!anySolo || val(tp.solo) > 0.5f);
                 lp.res = {val(tp.resMix), val(tp.resRoot), static_cast<int>(val(tp.resChord)), val(tp.resDecay),
                           val(tp.resColor), midiNotes, numMidiNotes};
                 lp.filter = {val(tp.fltCutoff), val(tp.fltReso), val(tp.fltMorph)};

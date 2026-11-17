@@ -29,6 +29,9 @@ public:
     // 0..1 where the track is playing in its sample, -1 when stopped or empty. Any thread.
     float getPlayPosition(size_t track) const { return playPos[track].load(std::memory_order_relaxed); }
     double getBars(size_t track) const; // the track's loop length in bars, any thread
+    // PLAY switches on the next bar: this is what the track does right now (PLAY may be waiting). Any thread.
+    bool isTrackOn(size_t track) const { return trackOn[track].load(std::memory_order_relaxed); }
+    bool isTrackAudible(size_t track) const; // on, not muted, and not silenced by another track's solo. Any thread.
 
     // Modulation. Targets are param IDs ("" = none); set/get on the message thread.
     void setModTarget(size_t slot, const juce::String& paramIdToTarget);
@@ -129,6 +132,8 @@ private:
         std::atomic<float>* eqMid;
         std::atomic<float>* eqMidFreq;
         std::atomic<float>* eqHigh;
+        std::atomic<float>* mute;
+        std::atomic<float>* solo;
     };
     std::array<TrackParams, kNumTracks> trackParams{};
     std::array<mensis::LoopTrack, kNumTracks> tracks;
@@ -142,6 +147,7 @@ private:
     std::atomic<uint64_t> blocksDone{0};
 
     std::array<std::atomic<float>, kNumTracks> playPos{};
+    std::array<std::atomic<bool>, kNumTracks> trackOn{}; // written by the audio thread on bar lines
     struct AtomicDot { std::atomic<float> x{0.0f}, env{0.0f}, pan{0.0f}; }; // env < 0 = plays backwards
     std::array<std::array<AtomicDot, mensis::GrainCloud::kMaxGrains>, kNumTracks> grainDots;
     std::array<std::atomic<float>, kNumTracks> grainAnchor{};

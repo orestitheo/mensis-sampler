@@ -453,3 +453,54 @@ TEST_CASE("a scene takes over on the next bar at a tempo where bars aren't whole
     p.updateScenes();
     CHECK(p.getPendingScene() == -1); // taken over on this bar, not a later one
 }
+
+TEST_CASE("PLAY switches on the next bar; mute and solo are instant") {
+    juce::ScopedJuceInitialiser_GUI juce;
+    MensisProcessor p; // own 120 BPM clock: one bar = 2 s = 96000 samples
+    p.setRateAndBufferSizeDetails(kRate, kBlock);
+    p.prepareToPlay(kRate, kBlock);
+    REQUIRE(p.loadSample(0, writeTone(), false));
+    set(p, "t1.bars", 2.0f);
+
+    juce::AudioBuffer<float> buffer(2, kBlock);
+    juce::MidiBuffer midi;
+    std::vector<float> out;
+    auto run = [&](int blocks) {
+        for (int b = 0; b < blocks; ++b) {
+            p.processBlock(buffer, midi);
+            out.insert(out.end(), buffer.getReadPointer(0), buffer.getReadPointer(0) + kBlock);
+        }
+    };
+    auto peak = [&](size_t a, size_t b) {
+        float m = 0.0f;
+        for (size_t i = a; i < b; ++i) m = std::max(m, std::abs(out[i]));
+        return m;
+    };
+    run(10);
+    set(p, "t1.on", 0.0f);
+    CHECK(p.isTrackOn(0)); // waiting for the bar
+    run(250);              // past 96000
+    CHECK_FALSE(p.isTrackOn(0));
+    CHECK(peak(90000, 95990) > 0.2f);    // still playing right up to the bar
+    CHECK(peak(98500, 128000) < 1e-4f);  // gone after it (50 ms fade)
+
+    set(p, "t1.on", 1.0f);
+    run(200); // past the bar at 192000
+    CHECK(peak(180000, 191990) < 1e-4f);
+    CHECK(peak(194500, 200000) > 0.2f);
+
+    const size_t now = out.size();
+    set(p, "t1.mute", 1.0f);
+    CHECK_FALSE(p.isTrackAudible(0));
+    run(20);
+    CHECK(peak(now + 4000, out.size()) < 1e-4f); // muted within ~50 ms, no bar wait
+    set(p, "t1.mute", 0.0f);
+    set(p, "t2.solo", 1.0f); // another track soloed: track 1 goes quiet
+    CHECK_FALSE(p.isTrackAudible(0));
+    run(20);
+    CHECK(peak(out.size() - 6000, out.size()) < 1e-4f);
+    set(p, "t1.solo", 1.0f); // both soloed: track 1 plays again
+    CHECK(p.isTrackAudible(0));
+    run(20);
+    CHECK(peak(out.size() - 6000, out.size()) > 0.2f);
+}

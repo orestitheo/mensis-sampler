@@ -199,3 +199,9 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
   so the older params keep their order.
 - UI: EQ page, with the morph filter's three knobs moved here from the RESO page (their IDs are unchanged).
 - Not in Mensis FX yet.
+
+## Play / Mute / Solo
+- PLAY (`t1.on` ..t4) switches on the next bar line (immediately when Live is stopped). The button blinks
+  while it waits. The audio thread now always ends a chunk on a bar line, so PLAY and scenes switch exactly there.
+- M (`t1.mute`) and S (`t1.solo`) are instant, like Live's. Any solo on = only soloed tracks play.
+  All three use the track's 50 ms level fade, so no clicks. They're in scenes like every other switch.
