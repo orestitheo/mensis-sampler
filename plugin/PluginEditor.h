@@ -163,7 +163,7 @@ private:
     void set(const char* name, float v) { param(name)->setValueNotifyingHost(param(name)->convertTo0to1(v)); }
     std::pair<float, float> region() const {
         const float st = value("start");
-        return {st, st + value("length") * (1.0f - st)};
+        return {st, std::min(1.0f, st + value("length"))};
     }
 
     // --- zoom: the view shows [v0, v1] of the sample (0..1) ---
@@ -286,11 +286,11 @@ private:
         return Grab::New;
     }
 
-    // Region as 0..1 of the sample -> Start and Length params (Length = share of what's after Start).
+    // Region as 0..1 of the sample -> Start and Length params (Length = share of the whole sample).
     void apply(float st, float en) {
         st = std::clamp(st, 0.0f, 0.99f);
         set("start", st);
-        set("length", std::clamp((en - st) / (1.0f - st), 0.01f, 1.0f));
+        set("length", std::clamp(en - st, 0.01f, 1.0f));
     }
 
     float xNorm(const juce::MouseEvent& e) const { return fromX(e.position.x); }

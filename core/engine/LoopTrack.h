@@ -10,7 +10,7 @@ namespace mensis {
 
 struct LoopParams {
     float start = 0.0f;   // 0..1, where the loop starts in the sample
-    float length = 1.0f;  // 0..1 of what's left after start
+    float length = 1.0f;  // 0..1 of the whole sample; cut at the sample end
     double bars = 1.0;    // the loop region is stretched to this many bars; speed (and pitch) follow, like tape
     bool reverse = false;
     float levelDb = -6.0f; // -60 = silent

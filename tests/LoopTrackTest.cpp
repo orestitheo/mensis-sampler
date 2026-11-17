@@ -50,9 +50,11 @@ TEST_CASE("reverse reads backwards, start/length pick the region") {
     CHECK_THAT(renderOne(p, 1.0), WithinAbs(0.74925, 1e-3));
     p.reverse = false;
     p.start = 0.5f;
-    p.length = 0.5f; // half of what's left: region is samples 499.5 .. 749.25
+    p.length = 0.5f; // half of the whole sample: region is samples 499.5 .. 999
     CHECK_THAT(renderOne(p, 0.0), WithinAbs(0.0, 1e-6)); // seam fade: silent exactly at the loop start
-    CHECK_THAT(renderOne(p, 2.0), WithinAbs(0.6244, 1e-3));
+    CHECK_THAT(renderOne(p, 2.0), WithinAbs(0.74925, 1e-3));
+    p.start = 0.8f; // would run past the end: cut there, region 799.2 .. 999
+    CHECK_THAT(renderOne(p, 2.0), WithinAbs(0.8991, 1e-3));
 }
 
 TEST_CASE("no click at the loop seam") {

@@ -70,7 +70,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
     numSlices = 0;
     if (p.slice && !p.reverse) {
         const double rs = static_cast<double>(start.getCurrentValue()) * (n - 1);
-        const double rl = std::max(1.0, static_cast<double>(length.getCurrentValue()) * (n - 1 - rs));
+        const double rl = std::clamp(static_cast<double>(length.getCurrentValue()) * (n - 1), 1.0, std::max(1.0, n - 1 - rs));
         auto add = [&](double pos) {
             if (numSlices == kMaxSlices) return;
             slicePos[numSlices] = pos;
@@ -122,7 +122,7 @@ void LoopTrack::render(const Sample& sample, const LoopParams& p, double ppq, do
         const ChaosRead chaos = chaosAt(lp.chaos, loopBeats, beats);
         const double phase = loopPhase(chaos.beats);
         const double regionStart = static_cast<double>(start.getNextValue()) * (n - 1);
-        const double regionLen = std::max(1.0, static_cast<double>(length.getNextValue()) * (n - 1 - regionStart));
+        const double regionLen = std::clamp(static_cast<double>(length.getNextValue()) * (n - 1), 1.0, std::max(1.0, n - 1 - regionStart)); // cut at the sample end
         auto mapPos = [&](double ph) { return regionStart + (p.reverse ? 1.0 - ph : ph) * regionLen; };
         const double pos = mapPos(phase);
 
