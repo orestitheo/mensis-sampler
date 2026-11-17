@@ -13,6 +13,7 @@ const juce::StringArray kGridNames{"1/32", "1/16", "1/8", "1/4"};
 constexpr std::array<double, 4> kGridBeats{0.125, 0.25, 0.5, 1.0};
 const juce::StringArray kFeelNames{"Grid", "Loose", "Free"};
 const juce::StringArray kModTypeNames{"LFO", "Random", "Env"};
+const juce::StringArray kModFollowNames{"Self", "T1", "T2", "T3", "T4", "Mix"};
 const juce::StringArray kModRateNames{"1/16T", "1/16", "1/8T", "1/8", "1/4T", "1/4", "1/2T", "1/2",
                                      "1 bar", "2 bars", "4 bars", "8 bars"};
 constexpr std::array<double, 12> kModRateBeats{1.0 / 6.0, 0.25, 1.0 / 3.0, 0.5, 2.0 / 3.0, 1.0, 4.0 / 3.0, 2.0,
@@ -97,6 +98,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout() {
                                                               "T" + juce::String(t + 1) + " Beat", false));
     for (size_t t = 0; t < MensisProcessor::kNumTracks; ++t) // new params go at the end, so the old ones keep their order
         addEqParams(layout, paramId(t, ""), "T" + juce::String(t + 1) + " ");
+    for (size_t m = 1; m <= MensisProcessor::kModSlots; ++m) // what an Env mod listens to (sidechain)
+        layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"mod" + juce::String(m) + ".follow", 1},
+                                                                "Mod " + juce::String(m) + " Follow", kModFollowNames, 0));
     return layout;
 }
 
@@ -126,7 +130,7 @@ MensisProcessor::MensisProcessor()
     swingParam = params.getRawParameterValue("swing");
     for (size_t m = 0; m < kModSlots; ++m) {
         auto raw = [&](const char* name) { return params.getRawParameterValue("mod" + juce::String(m + 1) + "." + name); };
-        modParams[m] = {raw("type"), raw("rate"), raw("shape"), raw("depth"), raw("sync"), raw("hz")};
+        modParams[m] = {raw("type"), raw("rate"), raw("shape"), raw("depth"), raw("sync"), raw("hz"), raw("follow")};
         modTargetIndex[m].store(-1);
     }
     macroParams = {params.getRawParameterValue("macro.destroy"), params.getRawParameterValue("macro.drift"),
@@ -265,7 +269,9 @@ void MensisProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
                                                mp.shape->load(),
                                                seedNew, static_cast<uint32_t>(m)};
                 const int track = idx >= 0 ? paramTrack[static_cast<size_t>(idx)] : -1;
-                const float level = track >= 0 ? trackLevel[static_cast<size_t>(track)] : mixLevel;
+                const auto follow = static_cast<int>(mp.follow->load());
+                const int src = follow == 0 ? track : follow == 5 ? -1 : follow - 1;
+                const float level = src >= 0 ? trackLevel[static_cast<size_t>(src)] : mixLevel;
                 const float v = modulators[m].next(params, chunkPpq, level, n / getSampleRate(), bpm);
                 modSignal[m].store(v, std::memory_order_relaxed);
                 if (idx < 0) continue;

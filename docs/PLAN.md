@@ -153,6 +153,8 @@ Mensis Sampler plays itself: samples loop in sync with Live, knobs and Chaos ste
     (params `mod1.sync`, `mod1.hz`). Hz is turned into beats-per-cycle at the current tempo.
   - Env: follows the loudness of the target's track (the whole mix for global targets). RATE = release,
     SHAPE = sensitivity. Unipolar (0..1); LFO/Random are bipolar.
+    FOLLOW (`mod1.follow`: Self / T1-T4 / Mix) picks another source = sidechain. Ducking: Env, FOLLOW T4,
+    map T1 Level, DEPTH negative, RATE = how fast it comes back.
   - Applied as: normalised target value + DEPTH x mod, clamped. Recomputed every 128 samples
     (engine smoothing covers the steps). Same seed + same position = same modulation.
 - MAP: press MAP on a slot, then touch any knob: it becomes the target (DEPTH 0 jumps to +50%, so a

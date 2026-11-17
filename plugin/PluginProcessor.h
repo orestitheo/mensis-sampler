@@ -158,6 +158,7 @@ private:
     struct ModSlotParams {
         std::atomic<float>* type; std::atomic<float>* rate; std::atomic<float>* shape; std::atomic<float>* depth;
         std::atomic<float>* sync; std::atomic<float>* hz; // SYNC off: RATE in Hz instead of note lengths
+        std::atomic<float>* follow; // Env listens to: 0 = target's own track (or mix), 1-4 = T1-T4, 5 = mix
     };
     std::array<ModSlotParams, kModSlots> modParams{};
     std::array<std::atomic<float>*, 4> macroParams{};

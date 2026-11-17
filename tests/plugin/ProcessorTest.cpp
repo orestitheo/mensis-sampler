@@ -395,3 +395,23 @@ TEST_CASE("the current scene counts as changed once a knob moves away from it") 
     set(p, "t1.level", -6.0f); // back where the scene has it
     CHECK_FALSE(p.sceneChanged());
 }
+
+TEST_CASE("Env FOLLOW: listens to another track (sidechain)") {
+    juce::ScopedJuceInitialiser_GUI juce;
+    MensisProcessor p;
+    p.setRateAndBufferSizeDetails(kRate, kBlock);
+    p.prepareToPlay(kRate, kBlock);
+    REQUIRE(p.loadSample(0, writeTone(), false)); // only T1 plays
+    set(p, "mod1.type", 2.0f);                     // Env
+    set(p, "mod1.rate", 1.0f);                     // 1/16: fast release
+    p.setModTarget(0, "t2.level");                 // a knob on silent T2
+    auto envAfter = [&](float follow) {
+        set(p, "mod1.follow", follow);
+        juce::AudioBuffer<float> buffer(2, kBlock);
+        juce::MidiBuffer midi;
+        for (int i = 0; i < 40; ++i) p.processBlock(buffer, midi); // ~0.4 s
+        return p.getModSignal(0);
+    };
+    CHECK(envAfter(1.0f) > 0.1f);  // FOLLOW T1: hears the tone
+    CHECK(envAfter(0.0f) < 0.05f); // SELF: hears silent T2
+}

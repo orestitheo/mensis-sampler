@@ -712,6 +712,18 @@ public:
             row.syncAttachment = std::make_unique<juce::ButtonParameterAttachment>(*p.params.getParameter(prefix + "sync"), row.sync);
             addAndMakeVisible(row.sync);
             row.syncParam = p.params.getRawParameterValue(prefix + "sync");
+            row.typeParam = p.params.getRawParameterValue(prefix + "type");
+            row.followParam = p.params.getParameter(prefix + "follow");
+            row.follow.setTooltip("What the Env listens to. Another track = sidechain (e.g. T4 drums ducking T1)");
+            row.follow.onClick = [&row] { // click = next choice: SELF, T1..T4, MIX
+                auto* f = row.followParam;
+                const int n = f->getNumSteps();
+                const int next = (juce::roundToInt(f->getValue() * static_cast<float>(n - 1)) + 1) % n;
+                f->beginChangeGesture();
+                f->setValueNotifyingHost(static_cast<float>(next) / static_cast<float>(n - 1));
+                f->endChangeGesture();
+            };
+            addChildComponent(row.follow);
             row.map.setButtonText("MAP");
             row.map.setTooltip("Press, then touch any knob: it becomes this modulator's target");
             row.map.onClick = [this, m] { if (onMap) onMap(static_cast<int>(m)); };
@@ -760,6 +772,7 @@ public:
             for (auto& k : rows[m].knobs) k.setBounds(row.removeFromLeft(58).withSizeKeepingCentre(58, std::min(row.getHeight(), 92)));
             rows[m].hz.setBounds(rows[m].knobs[1].getBounds()); // same spot: one shows, by SYNC
             rows[m].sync.setBounds(rows[m].knobs[1].getBounds().withY(rows[m].knobs[1].getBottom() + 2).withHeight(18).reduced(6, 0));
+            rows[m].follow.setBounds(rows[m].knobs[0].getBounds().withY(rows[m].knobs[0].getBottom() + 2).withHeight(18).reduced(2, 0));
             auto buttons = row.removeFromLeft(56).withSizeKeepingCentre(48, 50);
             rows[m].map.setBounds(buttons.removeFromTop(22));
             buttons.removeFromTop(6);
@@ -814,6 +827,8 @@ private:
                 rows[m].knobs[1].setVisible(synced);
                 rows[m].hz.setVisible(!synced);
             }
+            rows[m].follow.setVisible(rows[m].typeParam->load() > 1.5f); // Env only
+            rows[m].follow.setButtonText(rows[m].followParam->getCurrentValueAsText().toUpperCase());
         }
         if (isShowing()) repaint();
     }
@@ -821,7 +836,9 @@ private:
     struct Row {
         std::array<Knob, 4> knobs; // TYPE, RATE (note lengths), SHAPE, DEPTH
         Knob hz;                   // RATE in Hz, shown instead when SYNC is off
-        juce::TextButton map, clear, sync;
+        juce::TextButton map, clear, sync, follow; // FOLLOW: Env source, shown only for Env
+        std::atomic<float>* typeParam = nullptr;
+        juce::RangedAudioParameter* followParam = nullptr;
         std::unique_ptr<juce::ButtonParameterAttachment> syncAttachment;
         std::atomic<float>* syncParam = nullptr;
         juce::Label target;
